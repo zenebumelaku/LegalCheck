@@ -17,9 +17,10 @@ def db_engine() -> Generator[Engine, None, None]:
     )
 
     @event.listens_for(engine, "connect")
-    def enable_foreign_keys(connection, _record) -> None:
+    def enable_foreign_keys(connection, connection_record) -> None:
         cursor = connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        connection_record.info["foreign_keys_enabled"] = True
         cursor.close()
 
     Base.metadata.create_all(engine)
