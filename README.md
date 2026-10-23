@@ -1,4 +1,6 @@
-# LegalCheck Ethiopia
+git remote add origin https://github.com/zenebumelaku/LegalCheck.git
+git branch -M main
+git push -u origin main# LegalCheck Ethiopia
 
 Backend foundation for the LegalCheck Ethiopia employment-contract compliance
 platform. The initial setup provides a versioned FastAPI application, health
@@ -79,5 +81,7 @@ audit and finding records, but does not implement analysis workflows.
 Embeddings and vector retrieval are deferred to Part 6. Legal-source status is
 initialized to `unknown`; records are not considered current unless their
 status and verification are established explicitly.
+
 # LegalCheck
+
 # LegalCheck
