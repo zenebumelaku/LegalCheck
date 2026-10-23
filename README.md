@@ -80,3 +80,4 @@ Embeddings and vector retrieval are deferred to Part 6. Legal-source status is
 initialized to `unknown`; records are not considered current unless their
 status and verification are established explicitly.
 # LegalCheck
+# LegalCheck
