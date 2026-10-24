@@ -273,6 +273,8 @@ index rather than mixing incompatible vectors. The database vector dimension
 is fixed at 384; changing it requires a planned schema migration and a
 matching provider. Indexing sends provision text to the configured embedding
 endpoint, so configure only a provider approved to process the source material.
+Remote embedding and analysis endpoints must use HTTPS; unauthenticated HTTP
+is accepted only for loopback development endpoints such as `localhost`.
 
 Once a source has passed the registry's independent verification workflow,
 generate its embeddings with:
@@ -490,7 +492,8 @@ Before production:
   retention/purge schedule or orphan-file reconciliation job is implemented.
 - Approve the LLM/embedding vendors for confidential contract/legal data and
   review their retention and residency terms. The app does not claim model
-  accuracy or legally validated conclusions.
+  accuracy or legally validated conclusions. Remote provider URLs must use
+  HTTPS; unauthenticated HTTP is allowed only for loopback development.
 - Apply migrations and run tests on the actual PostgreSQL/pgvector and Redis
   versions used in production. Local automated checks used SQLite and did not
   test managed-service permissions, network failures, or multi-worker load.

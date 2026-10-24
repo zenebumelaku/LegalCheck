@@ -1,10 +1,10 @@
 import json
 from typing import Protocol
-from urllib.parse import urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.core.config import Settings, get_settings
+from app.core.provider_url import validate_provider_url
 
 
 class LLMProviderError(RuntimeError):
@@ -38,13 +38,15 @@ class OpenAICompatibleLLMProvider:
     def __init__(self, settings: Settings) -> None:
         if not settings.llm_api_url:
             raise LLMProviderError("LLM provider URL is not configured.")
-        parsed_url = urlparse(settings.llm_api_url)
-        if settings.llm_api_key and parsed_url.scheme != "https":
-            raise LLMProviderError(
-                "Authenticated analysis providers must use HTTPS."
+        try:
+            validate_provider_url(
+                settings.llm_api_url,
+                has_api_key=settings.llm_api_key is not None,
             )
-        if parsed_url.scheme not in {"https", "http"} or not parsed_url.netloc:
-            raise LLMProviderError("The analysis provider URL is invalid.")
+        except ValueError as exc:
+            raise LLMProviderError(
+                "The analysis provider URL is invalid or insecure."
+            ) from exc
         self._url = settings.llm_api_url.rstrip("/")
         if not self._url.endswith("/chat/completions"):
             self._url += "/chat/completions"

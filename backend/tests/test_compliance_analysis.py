@@ -4,6 +4,7 @@ from io import BytesIO
 from uuid import uuid4
 
 from docx import Document as DocxDocument
+import pytest
 from pydantic import SecretStr
 
 from app.core.config import Settings
@@ -397,3 +398,14 @@ def test_llm_provider_keeps_contract_text_in_untrusted_user_payload(monkeypatch)
     assert retrieved_injection in messages[1]["content"]
     assert injected not in messages[0]["content"]
     assert captured["timeout"] > 0
+
+
+def test_llm_provider_rejects_remote_plain_http_even_without_api_key() -> None:
+    with pytest.raises(LLMProviderError, match="invalid or insecure"):
+        OpenAICompatibleLLMProvider(
+            Settings(
+                llm_provider="openai_compatible",
+                llm_api_url="http://provider.example/v1",
+                llm_api_key=None,
+            )
+        )

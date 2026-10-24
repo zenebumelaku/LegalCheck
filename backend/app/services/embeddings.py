@@ -5,8 +5,10 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.core.config import Settings, settings
+from app.core.provider_url import validate_provider_url
 
 EMBEDDING_DIMENSIONS = 384
+_MAX_PROVIDER_RESPONSE_BYTES = 1_000_000
 
 
 class EmbeddingProvider(Protocol):
@@ -35,6 +37,12 @@ class OpenAICompatibleEmbeddingProvider:
         api_key: Optional[str],
         timeout_seconds: float = 60,
     ) -> None:
+        try:
+            validate_provider_url(endpoint, has_api_key=bool(api_key))
+        except ValueError as exc:
+            raise EmbeddingProviderConfigurationError(
+                "The embedding provider URL is invalid or insecure."
+            ) from exc
         self.endpoint = endpoint.rstrip("/")
         self.model_name = model_name
         self.model_version = model_version
@@ -63,8 +71,18 @@ class OpenAICompatibleEmbeddingProvider:
         )
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read())
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+                response_body = response.read(_MAX_PROVIDER_RESPONSE_BYTES + 1)
+            if len(response_body) > _MAX_PROVIDER_RESPONSE_BYTES:
+                raise ValueError("Embedding provider response exceeded the size limit.")
+            payload = json.loads(response_body)
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            OSError,
+            ValueError,
+            TypeError,
+        ) as exc:
             raise EmbeddingProviderError(
                 "The configured embedding provider request failed."
             ) from exc
