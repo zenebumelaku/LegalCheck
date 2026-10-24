@@ -120,12 +120,38 @@ until an email provider is configured. Rate limiting is not configured in this
 application; deploy login, registration, and reset endpoints behind an
 appropriately configured rate limiter or API gateway.
 
-This setup intentionally does not include contract uploads, RAG, or
-audit-processing logic. The database schema includes the foundational audit
-and finding records, but does not implement analysis workflows. Embeddings and
-vector retrieval are deferred to Part 6. Legal-source status is initialized
-to `unknown`; records are not considered current unless their status and
-verification are established explicitly.
+## Private document storage
+
+Configure `MAX_UPLOAD_SIZE_MB` (default 10; maximum 100),
+`MAX_DOCX_UNCOMPRESSED_SIZE_MB` (default 50; maximum 500),
+`PRIVATE_STORAGE_PATH` (default `var/private-documents`) and `OCR_ENABLED`
+(default `false`) in `backend/.env`. Local storage is created outside the
+application's public web root with restricted directory/file permissions.
+Keep the storage directory on a private, access-controlled volume, exclude it
+from web-server static roots and backups that are not approved for contracts,
+and ensure it has sufficient disk capacity.
+
+`PrivateFileStorage` is the storage boundary for private file persistence.
+Local development uses `LocalPrivateFileStorage`; future object-storage
+backends should implement that interface using private buckets and server-side
+access controls. Original filenames are metadata only; generated keys identify
+stored objects. The ordinary document metadata endpoints never return storage
+keys or file contents.
+
+Uploads accept PDF and DOCX only. PDFs with little/no text include a scanned
+document warning. OCR is not bundled; setting `OCR_ENABLED=true` currently
+reports that no OCR provider is integrated and does not execute OCR. DOCX page
+numbers are not available from the document structure, so extraction includes
+paragraph references without inventing page numbers. Delete removes the
+private file and soft-deletes metadata to preserve audit foreign keys. If
+physical cleanup fails, the API reports that cleanup is pending while leaving
+the metadata soft-deleted.
+
+This setup does not implement RAG or legal analysis. The database schema
+includes foundational audit and finding records, but not analysis workflows.
+Embeddings and vector retrieval are deferred to Part 6. Legal-source status is
+initialized to `unknown`; records are not considered current unless their
+status and verification are established explicitly.
 
 # LegalCheck
 

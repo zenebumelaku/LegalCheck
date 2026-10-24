@@ -6,9 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.documents import router as documents_router
 from app.api.routes.health import router as health_router
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.core.middleware import UploadRequestSizeLimitMiddleware
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
@@ -20,6 +22,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
+)
+app.add_middleware(
+    UploadRequestSizeLimitMiddleware,
+    max_file_size=settings.max_upload_size_bytes,
+    upload_path=f"{settings.api_v1_prefix}/documents/upload",
 )
 
 
@@ -100,3 +107,4 @@ async def unhandled_exception_handler(
 
 app.include_router(health_router, prefix=settings.api_v1_prefix)
 app.include_router(auth_router, prefix=settings.api_v1_prefix)
+app.include_router(documents_router, prefix=settings.api_v1_prefix)

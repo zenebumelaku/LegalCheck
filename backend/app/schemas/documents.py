@@ -11,7 +11,7 @@ class ExtractedParagraphResponse(BaseModel):
 
 
 class ExtractedPageResponse(BaseModel):
-    page_number: int
+    page_number: Optional[int]
     paragraphs: List[ExtractedParagraphResponse]
 
 

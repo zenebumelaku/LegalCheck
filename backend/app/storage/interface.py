@@ -14,6 +14,7 @@ class LocalPrivateFileStorage:
     def __init__(self, root: Path) -> None:
         self._root = root.resolve()
         self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._root.chmod(0o700)
 
     def _path_for(self, key: str) -> Path:
         path = (self._root / key).resolve()

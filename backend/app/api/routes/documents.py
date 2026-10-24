@@ -105,6 +105,11 @@ def _validate_file_type(filename: str, content_type: Optional[str], content: byt
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                 detail="The file content does not match its extension.",
             )
+    elif content.startswith(bytes.fromhex("D0CF11E0A1B11AE1")):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Encrypted or legacy Office documents are not supported.",
+        )
     elif not content.startswith(b"PK\x03\x04"):
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -177,6 +182,7 @@ def upload_document(
             content,
             document_type,
             settings.max_docx_uncompressed_size_bytes,
+            settings.ocr_enabled,
         )
     except EncryptedDocumentError as exc:
         raise HTTPException(
@@ -218,7 +224,6 @@ def upload_document(
     db.add(document)
     try:
         db.commit()
-        db.refresh(document)
     except Exception:
         db.rollback()
         try:
@@ -266,10 +271,14 @@ def list_documents(
         query = query.where(Document.organization_id == organization_id)
     else:
         member_ids = select(OrganizationMembership.organization_id).where(
-            OrganizationMembership.user_id == user.id
+            OrganizationMembership.user_id == user.id,
+            OrganizationMembership.membership_role.in_(_READABLE_ORGANIZATION_ROLES),
         )
         query = query.where(
-            (Document.owner_user_id == user.id)
+            (
+                (Document.owner_user_id == user.id)
+                & Document.organization_id.is_(None)
+            )
             | Document.organization_id.in_(member_ids)
         )
 
