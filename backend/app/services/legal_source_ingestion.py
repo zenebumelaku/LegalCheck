@@ -2,7 +2,7 @@ import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -49,7 +49,7 @@ def ingest_legal_source(
     if not provisions:
         raise ValueError("At least one provision is required.")
 
-    provision_keys: set[tuple[str, str | None, str | None]] = set()
+    provision_keys: set[tuple[str, Optional[str], Optional[str]]] = set()
     for provision in provisions:
         key = (
             provision.article_number,

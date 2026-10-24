@@ -2,6 +2,8 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
+from typing import Optional
+
 from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -20,7 +22,7 @@ from app.storage.interface import PrivateFileStorage, get_private_storage
 logger = logging.getLogger(__name__)
 
 
-def _claim_queued_audit(db: Session, audit_id: UUID) -> UUID | None:
+def _claim_queued_audit(db: Session, audit_id: UUID) -> Optional[UUID]:
     attempt_id = uuid4()
     result = db.execute(
         update(Audit)
@@ -43,7 +45,7 @@ def run_audit_job(
     *,
     db: Session,
     storage: PrivateFileStorage,
-    llm_provider: LLMProvider | None = None,
+    llm_provider: Optional[LLMProvider] = None,
 ) -> bool:
     attempt_id = _claim_queued_audit(db, audit_id)
     if attempt_id is None:

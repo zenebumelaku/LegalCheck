@@ -67,13 +67,21 @@ Copy the example environment file:
 cp .env.example .env
 ```
 
-Configure your backend URL if connecting to an external FastAPI backend:
+Configure your backend URL if connecting to the FastAPI backend:
 ```env
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 # or
 VITE_API_BASE_URL=http://localhost:8000
 ```
-*(If left blank, LegalCheck Ethiopia operates in resilient standalone mode with pre-seeded audits and client-side analysis).*
+
+Enable the legacy demo-only local analysis path only when you intentionally want offline sample data and client-side auditing:
+```env
+NEXT_PUBLIC_ENABLE_DEMO_FALLBACK=true
+# or
+VITE_ENABLE_DEMO_FALLBACK=true
+```
+
+*Without this flag, the frontend calls the real backend APIs and does not silently replace failed requests with mock data.*
 
 ### Running Development Server
 

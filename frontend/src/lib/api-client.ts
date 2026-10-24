@@ -1,12 +1,23 @@
 /**
- * Centralized API Client for LegalCheck Ethiopia
- * Communicates with FastAPI backend if configured, with resilient offline/fallback support.
+ * Centralized API Client for LegalCheck Ethiopia.
+ * The app defaults to the real FastAPI backend; demo/offline behaviour is
+ * opt-in via explicit environment flags rather than silent fallback.
  */
 
 const API_BASE_URL =
   (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_BASE_URL) ||
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
   '';
+
+export function isDemoFallbackEnabled(): boolean {
+  const envFlag =
+    (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_ENABLE_DEMO_FALLBACK) ||
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ENABLE_DEMO_FALLBACK) ||
+    (typeof window !== 'undefined' && window.localStorage.getItem('lc_demo_fallback')) ||
+    '';
+
+  return envFlag === '1' || envFlag === 'true' || envFlag === 'yes';
+}
 
 export interface ApiRequestOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined>;

@@ -1,5 +1,5 @@
 import json
-from typing import Protocol
+from typing import Optional, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -104,7 +104,7 @@ class OpenAICompatibleLLMProvider:
             raise LLMProviderError("The configured analysis provider failed.") from exc
 
 
-def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
+def get_llm_provider(settings: Optional[Settings] = None) -> LLMProvider:
     current_settings = settings or get_settings()
     if current_settings.llm_provider == "disabled":
         raise LLMProviderError("AI analysis provider is disabled.")

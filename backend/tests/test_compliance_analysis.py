@@ -1,6 +1,7 @@
 import json
 from datetime import date, datetime, timezone
 from io import BytesIO
+from typing import Optional, Tuple
 from uuid import uuid4
 
 from docx import Document as DocxDocument
@@ -42,7 +43,7 @@ class MockLLM:
     model_name = "synthetic-test-model"
     model_version = "fixture-v1"
 
-    def __init__(self, response: dict | None = None, fail: bool = False) -> None:
+    def __init__(self, response: Optional[dict] = None, fail: bool = False) -> None:
         self.response = response or {}
         self.fail = fail
         self.calls: list[tuple[dict, list[dict]]] = []
@@ -62,7 +63,7 @@ def _docx_bytes(text: str = "The employee salary will be paid monthly.") -> byte
     return buffer.getvalue()
 
 
-def _make_audit(db_session, source_text: str | None = "Salary must be paid monthly.") -> tuple[Audit, LegalProvision | None]:
+def _make_audit(db_session, source_text: Optional[str] = "Salary must be paid monthly.") -> Tuple[Audit, Optional[LegalProvision]]:
     user = User(name="Test User", email=f"{uuid4()}@example.test", password_hash="not-a-real-hash")
     db_session.add(user)
     db_session.flush()

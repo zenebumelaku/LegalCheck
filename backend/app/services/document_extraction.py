@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Iterator, List, Protocol, Union
+from typing import Iterator, List, Optional, Protocol, Union
 from zipfile import BadZipFile, ZipFile
 import zlib
 
@@ -38,7 +38,7 @@ class ExtractedParagraph:
 
 @dataclass(frozen=True)
 class ExtractedPage:
-    page_number: int | None
+    page_number: Optional[int]
     paragraphs: List[ExtractedParagraph]
 
 

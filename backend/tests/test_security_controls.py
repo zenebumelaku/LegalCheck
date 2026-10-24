@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from typing import Optional
 
 import pytest
 from fastapi import HTTPException
@@ -16,7 +17,7 @@ from app.main import app, unhandled_exception_handler
 
 def _request(
     *,
-    headers: list[tuple[bytes, bytes]] | None = None,
+    headers: Optional[list[tuple[bytes, bytes]]] = None,
     client: tuple[str, int] = ("192.0.2.11", 1234),
 ) -> Request:
     return Request(

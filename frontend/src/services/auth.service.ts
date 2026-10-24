@@ -1,60 +1,77 @@
 import { User } from '../types';
-import { apiRequest } from '../lib/api-client';
-
-const DEFAULT_USER: User = {
-  id: 'usr_eth_991',
-  email: 'compliance@addistech.et',
-  fullName: 'Tewodros Kassahun',
-  organization: 'Addis Tech Solutions PLC',
-  role: 'COMPLIANCE_OFFICER',
-  createdAt: '2026-01-10T08:30:00Z',
-  dataRetentionDays: 90
-};
+import { apiRequest, isDemoFallbackEnabled } from '../lib/api-client';
 
 export class AuthService {
   private static userKey = 'lc_active_session_user';
   private static tokenKey = 'lc_auth_token';
 
-  static async getCurrentUser(): Promise<User | null> {
+  private static getStoredUser(): User | null {
+    if (typeof window === 'undefined') return null;
+    const stored = sessionStorage.getItem(this.userKey);
+    if (!stored) return null;
     try {
-      // Attempt backend call if API is alive
-      return await apiRequest<User>('/api/v1/auth/me');
+      const parsed = JSON.parse(stored) as User;
+      return parsed && parsed.email ? parsed : null;
     } catch {
-      // Fallback to session
-      if (typeof window === 'undefined') return DEFAULT_USER;
-      const stored = sessionStorage.getItem(this.userKey);
-      if (stored) {
-        try {
-          return JSON.parse(stored) as User;
-        } catch {
-          return DEFAULT_USER;
-        }
-      }
-      return DEFAULT_USER;
+      return null;
     }
   }
 
-  static async login(email: string, _password: string): Promise<User> {
+  private static normalizeUser(response: any, existing?: User | null): User | null {
+    if (!response) return null;
+
+    const candidate = {
+      id: String(response.id ?? existing?.id ?? ''),
+      email: String(response.email ?? existing?.email ?? ''),
+      fullName: String(response.fullName ?? response.name ?? existing?.fullName ?? ''),
+      organization: String(response.organization ?? existing?.organization ?? ''),
+      role: (response.role as User['role']) ?? existing?.role ?? 'COMPLIANCE_OFFICER',
+      createdAt: String(response.createdAt ?? response.created_at ?? existing?.createdAt ?? new Date().toISOString()),
+      dataRetentionDays: Number(response.dataRetentionDays ?? existing?.dataRetentionDays ?? 90)
+    };
+
+    if (!candidate.email) return null;
+    return candidate;
+  }
+
+  static async getCurrentUser(): Promise<User | null> {
+    const stored = this.getStoredUser();
+
     try {
-      const response = await apiRequest<{ user: User; token?: string }>('/api/v1/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password: _password })
-      });
-      if (response.token && typeof window !== 'undefined') {
-        sessionStorage.setItem(this.tokenKey, response.token);
+      const user = await apiRequest<any>('/api/v1/auth/me');
+      const normalized = this.normalizeUser(user, stored);
+      if (normalized) {
+        this.setUser(normalized);
       }
-      this.setUser(response.user);
-      return response.user;
-    } catch {
-      // Local fallback for standalone mode
-      const user: User = {
-        ...DEFAULT_USER,
-        email,
-        fullName: email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-      };
-      this.setUser(user);
-      return user;
+      return normalized ?? stored;
+    } catch (error) {
+      if (isDemoFallbackEnabled()) {
+        return stored;
+      }
+      if (typeof window !== 'undefined') {
+        this.clearSession();
+      }
+      return null;
     }
+  }
+
+  static async login(email: string, password: string): Promise<User> {
+    const response = await apiRequest<{ access_token: string; user: any }>('/api/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password })
+    });
+
+    if (typeof window !== 'undefined' && response.access_token) {
+      sessionStorage.setItem(this.tokenKey, response.access_token);
+    }
+
+    const user = this.normalizeUser(response.user, this.getStoredUser());
+    if (!user) {
+      throw new Error('Authentication succeeded but the user payload was empty.');
+    }
+
+    this.setUser(user);
+    return user;
   }
 
   static async register(data: {
@@ -64,70 +81,73 @@ export class AuthService {
     role?: User['role'];
     password: string;
   }): Promise<User> {
-    try {
-      const response = await apiRequest<{ user: User; token?: string }>('/api/v1/auth/register', {
-        method: 'POST',
-        body: JSON.stringify(data)
-      });
-      if (response.token && typeof window !== 'undefined') {
-        sessionStorage.setItem(this.tokenKey, response.token);
-      }
-      this.setUser(response.user);
-      return response.user;
-    } catch {
-      const newUser: User = {
-        id: `usr_${Date.now()}`,
-        email: data.email,
+    const payload = {
+      name: data.fullName,
+      email: data.email,
+      password: data.password
+    };
+
+    const response = await apiRequest<any>('/api/v1/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+
+    const user = this.normalizeUser(
+      {
+        ...response,
         fullName: data.fullName,
         organization: data.organization,
-        role: data.role || 'HR_MANAGER',
-        createdAt: new Date().toISOString(),
-        dataRetentionDays: 90
-      };
-      this.setUser(newUser);
-      return newUser;
+        role: data.role ?? 'COMPLIANCE_OFFICER'
+      },
+      this.getStoredUser()
+    );
+
+    if (!user) {
+      throw new Error('Registration succeeded but the returned user payload was empty.');
     }
+
+    this.setUser(user);
+    return user;
   }
 
   static async logout(): Promise<void> {
     try {
       await apiRequest('/api/v1/auth/logout', { method: 'POST' });
     } catch {
-      // Ignore
+      // Ignore backend timeout/401 if the session is already invalid.
     } finally {
-      if (typeof window !== 'undefined') {
-        sessionStorage.removeItem(this.userKey);
-        sessionStorage.removeItem(this.tokenKey);
-      }
+      this.clearSession();
     }
   }
 
   static async requestPasswordReset(email: string): Promise<{ success: boolean; message: string }> {
-    try {
-      return await apiRequest<{ success: boolean; message: string }>('/api/v1/auth/forgot-password', {
-        method: 'POST',
-        body: JSON.stringify({ email })
-      });
-    } catch {
-      return {
-        success: true,
-        message: `Password reset instructions have been dispatched to ${email} if registered with the Ethiopian Business Registry.`
-      };
-    }
+    return await apiRequest<{ success: boolean; message: string }>('/api/v1/auth/password-reset-request', {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    });
   }
 
   static async updateProfile(updates: Partial<User>): Promise<User> {
-    const current = (await this.getCurrentUser()) || DEFAULT_USER;
-    const updated = { ...current, ...updates };
-    try {
-      return await apiRequest<User>('/api/v1/auth/profile', {
-        method: 'PATCH',
-        body: JSON.stringify(updates)
-      });
-    } catch {
-      this.setUser(updated);
-      return updated;
+    const current = this.getStoredUser() ?? this.normalizeUser({
+      email: '',
+      fullName: '',
+      organization: '',
+      role: 'COMPLIANCE_OFFICER'
+    });
+    const merged = { ...current, ...updates } as User;
+
+    if (!isDemoFallbackEnabled()) {
+      throw new Error('Profile updates require the backend profile API to be available.');
     }
+
+    this.setUser(merged);
+    return merged;
+  }
+
+  private static clearSession(): void {
+    if (typeof window === 'undefined') return;
+    sessionStorage.removeItem(this.userKey);
+    sessionStorage.removeItem(this.tokenKey);
   }
 
   private static setUser(user: User): void {

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from typing import Optional
 from uuid import UUID
 
 import pytest
@@ -49,8 +50,8 @@ def _add_source(
     version: str,
     verification_status: str = "verified",
     legal_status: str = "current",
-    effective_date: date | None = date(2020, 1, 1),
-    end_date: date | None = None,
+    effective_date: Optional[date] = date(2020, 1, 1),
+    end_date: Optional[date] = None,
     provisions: list[tuple[str, str]],
 ) -> LegalSource:
     reviewer = db.scalar(select(User).where(User.email == "retrieval-reviewer@example.test"))

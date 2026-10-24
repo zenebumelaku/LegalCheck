@@ -2,7 +2,7 @@ from collections import Counter
 from html import escape
 from io import BytesIO
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 from uuid import uuid4
 
 from reportlab.lib import colors
@@ -198,7 +198,7 @@ def _has_ethiopic_characters(texts: Iterable[str]) -> bool:
     )
 
 
-def _get_pdf_font(report: AuditReportResponse, font_path: Path | None) -> str:
+def _get_pdf_font(report: AuditReportResponse, font_path: Optional[Path]) -> str:
     texts = list(_report_strings(report.model_dump(mode="json")))
     requires_unicode_font = False
     for value in texts:
@@ -256,7 +256,7 @@ def _get_pdf_font(report: AuditReportResponse, font_path: Path | None) -> str:
     return font_name
 
 
-def _paragraph(text: str | None, style: ParagraphStyle) -> Paragraph:
+def _paragraph(text: Optional[str], style: ParagraphStyle) -> Paragraph:
     safe_text = escape(text or "").replace("\n", "<br/>")
     return Paragraph(safe_text or "—", style)
 
@@ -264,7 +264,7 @@ def _paragraph(text: str | None, style: ParagraphStyle) -> Paragraph:
 def render_audit_report_pdf(
     report: AuditReportResponse,
     *,
-    font_path: Path | None = None,
+    font_path: Optional[Path] = None,
 ) -> bytes:
     font_name = _get_pdf_font(report, font_path)
     styles = getSampleStyleSheet()
