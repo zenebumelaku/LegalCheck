@@ -8,6 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import AuthContext, get_auth_context, get_current_user
 from app.core.config import settings
+from app.core.rate_limit import (
+    enforce_login_rate_limit,
+    enforce_password_reset_rate_limit,
+    enforce_registration_rate_limit,
+)
 from app.core.security import (
     create_access_token,
     hash_access_token,
@@ -54,6 +59,7 @@ def create_login_response(user: User, db: Session) -> LoginResponse:
     "/register",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_registration_rate_limit)],
 )
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserResponse:
     user = User(
@@ -86,7 +92,11 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> UserRes
     return UserResponse.model_validate(user)
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post(
+    "/login",
+    response_model=LoginResponse,
+    dependencies=[Depends(enforce_login_rate_limit)],
+)
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse:
     user = db.scalar(
         select(User).where(func.lower(User.email) == str(payload.email))
@@ -129,6 +139,7 @@ def me(user: User = Depends(get_current_user)) -> UserResponse:
     "/password-reset-request",
     response_model=PasswordResetResponse,
     status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(enforce_password_reset_rate_limit)],
 )
 def password_reset_request(
     payload: PasswordResetRequest,

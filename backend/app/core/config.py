@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "LegalCheck Ethiopia"
+    app_environment: Literal["development", "test", "production"] = "development"
     api_v1_prefix: str = "/api/v1"
     database_url: Optional[str] = None
     redis_url: str = "redis://localhost:6379/0"
@@ -35,6 +36,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=90, gt=0, le=300)
     audit_job_timeout_seconds: int = Field(default=1800, gt=0, le=7200)
     audit_stale_after_seconds: int = Field(default=2100, gt=0, le=14400)
+    rate_limit_login_per_minute: int = Field(default=10, gt=0, le=1000)
+    rate_limit_auth_per_minute: int = Field(default=10, gt=0, le=1000)
+    rate_limit_upload_per_minute: int = Field(default=10, gt=0, le=1000)
+    rate_limit_audit_per_minute: int = Field(default=5, gt=0, le=1000)
     max_contract_analysis_characters: int = Field(
         default=500_000,
         gt=0,
@@ -47,6 +52,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AUDIT_STALE_AFTER_SECONDS must exceed AUDIT_JOB_TIMEOUT_SECONDS."
             )
+        if "*" in self.cors_origins:
+            raise ValueError("Wildcard CORS origins are not permitted.")
         return self
 
     @property

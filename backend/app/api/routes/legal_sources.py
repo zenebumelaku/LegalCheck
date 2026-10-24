@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import require_roles
 from app.core.config import settings
+from app.core.rate_limit import enforce_upload_rate_limit
 from app.db.models import LegalProvision, LegalSource, User
 from app.db.session import get_db
 from app.schemas.legal_sources import (
@@ -125,7 +126,7 @@ def search_legal_sources(
         pattern="^(unknown|current|amended|repealed|superseded)$",
     ),
     limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
     db: Session = Depends(get_db),
 ) -> LegalSourcePage:
     return _source_page(
@@ -155,7 +156,7 @@ def list_legal_sources(
     ),
     article_number: Optional[str] = Query(default=None, min_length=1, max_length=100),
     limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
     db: Session = Depends(get_db),
 ) -> LegalSourcePage:
     return _source_page(
@@ -176,6 +177,7 @@ def list_legal_sources(
     "/ingest",
     response_model=LegalSourceIngestionResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_upload_rate_limit)],
 )
 def ingest_source(
     metadata_json: str = Form(...),
@@ -190,6 +192,8 @@ def ingest_source(
         provisions = TypeAdapter(list[LegalProvisionIngestion]).validate_json(
             provisions_json
         )
+        if len(provisions) > 1000:
+            raise ValueError("At most 1000 provisions may be ingested at once.")
     except (ValidationError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -256,7 +260,7 @@ def ingest_source(
         ) from exc
     except IntegrityError as exc:
         db.rollback()
-        logger.exception("Database rejected legal source ingestion")
+        logger.error("Database rejected legal source ingestion")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The legal source version conflicts with an existing record.",
@@ -279,7 +283,7 @@ def list_source_provisions(
     ),
     language: Optional[str] = Query(default=None, min_length=1, max_length=50),
     limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
     db: Session = Depends(get_db),
 ) -> LegalProvisionPage:
     source_exists = db.scalar(

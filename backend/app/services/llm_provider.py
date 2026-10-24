@@ -1,5 +1,6 @@
 import json
 from typing import Protocol
+from urllib.parse import urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -37,6 +38,13 @@ class OpenAICompatibleLLMProvider:
     def __init__(self, settings: Settings) -> None:
         if not settings.llm_api_url:
             raise LLMProviderError("LLM provider URL is not configured.")
+        parsed_url = urlparse(settings.llm_api_url)
+        if settings.llm_api_key and parsed_url.scheme != "https":
+            raise LLMProviderError(
+                "Authenticated analysis providers must use HTTPS."
+            )
+        if parsed_url.scheme not in {"https", "http"} or not parsed_url.netloc:
+            raise LLMProviderError("The analysis provider URL is invalid.")
         self._url = settings.llm_api_url.rstrip("/")
         if not self._url.endswith("/chat/completions"):
             self._url += "/chat/completions"
@@ -73,12 +81,24 @@ class OpenAICompatibleLLMProvider:
         request = Request(self._url, data=body, headers=headers, method="POST")
         try:
             with urlopen(request, timeout=self._timeout) as response:
-                payload = json.loads(response.read())
+                response_body = response.read(1_000_001)
+            if len(response_body) > 1_000_000:
+                raise ValueError("Provider response exceeds the configured limit.")
+            payload = json.loads(response_body)
             content = payload["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise ValueError("Provider returned non-text content.")
             return content
-        except (HTTPError, URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            OSError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
             raise LLMProviderError("The configured analysis provider failed.") from exc
 
 

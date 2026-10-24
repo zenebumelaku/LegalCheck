@@ -21,7 +21,7 @@ class AuditReviewOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     review_date: Optional[date] = None
-    jurisdiction: str = Field(default="ET", min_length=1, max_length=200)
+    jurisdiction: Literal["ET"] = "ET"
     language: Optional[str] = Field(default=None, max_length=50)
     source_type: Optional[str] = Field(default=None, max_length=100)
     law_number: Optional[str] = Field(default=None, max_length=100)

@@ -89,7 +89,10 @@ def run_audit_job(
             db.commit()
         except SQLAlchemyError:
             db.rollback()
-            logger.exception("Could not persist worker failure for audit %s", audit_id)
+            logger.error(
+                "Could not persist worker failure for audit %s",
+                audit_id,
+            )
         logger.error(
             "Audit worker failed for audit %s with error type %s",
             audit_id,

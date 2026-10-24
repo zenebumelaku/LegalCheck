@@ -544,7 +544,10 @@ def analyze_audit(
         try:
             _mark_failed(db, audit_id, failure_code, attempt_id)
         except SQLAlchemyError:
-            logger.exception("Could not persist failed audit status for audit %s", audit_id)
+            logger.error(
+                "Could not persist failed audit status for audit %s",
+                audit_id,
+            )
         logger.warning(
             "Compliance analysis failed for audit %s with code %s",
             audit_id,

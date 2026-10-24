@@ -8,6 +8,20 @@ from sqlalchemy.pool import StaticPool
 from app.db.models import Base
 
 
+@pytest.fixture(autouse=True)
+def use_test_rate_limiter(monkeypatch):
+    from app.core.rate_limit import get_rate_limiter
+    from app.main import app
+
+    class NoopRateLimiter:
+        def check(self, request, bucket: str, limit: int) -> None:
+            return None
+
+    app.dependency_overrides[get_rate_limiter] = lambda: NoopRateLimiter()
+    yield
+    app.dependency_overrides.pop(get_rate_limiter, None)
+
+
 @pytest.fixture
 def db_engine() -> Generator[Engine, None, None]:
     engine = create_engine(

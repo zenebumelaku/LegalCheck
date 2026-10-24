@@ -116,9 +116,11 @@ password (minimum 12 characters); role and active status are assigned
 server-side. Email addresses are trimmed and normalized to lowercase and have
 a case-insensitive unique database index. The reset-request endpoint only
 returns a generic response: email delivery and reset tokens are not implemented
-until an email provider is configured. Rate limiting is not configured in this
-application; deploy login, registration, and reset endpoints behind an
-appropriately configured rate limiter or API gateway.
+until an email provider is configured. Redis-backed rate limits apply to login,
+registration, and password-reset requests. Configure
+`RATE_LIMIT_LOGIN_PER_MINUTE` and `RATE_LIMIT_AUTH_PER_MINUTE` in
+`backend/.env`; these endpoints return 503 when Redis is unavailable rather
+than bypassing the limit.
 
 ## Private document storage
 
@@ -425,3 +427,52 @@ authoritative fixture is available. To run them:
 cd backend
 python -m pytest tests/test_audits.py tests/test_compliance_analysis.py
 ```
+
+## Security posture and production checklist
+
+Implemented safeguards include Argon2id password hashing, normalized unique
+emails, hashed revocable random bearer tokens, protected endpoints, explicit
+organization membership checks, private local file storage, upload signature
+and MIME checks, bounded uploads and pagination, source verification gates,
+parameterized SQLAlchemy retrieval, strict model-output schemas, server-side
+citation validation, safe generic 500 responses, and Redis-backed limits on
+login, uploads/source ingestion, audit creation, and retry. No cookies are
+used, so browser CSRF protections are not applicable to the bearer-token API;
+CORS does not allow credentials. Request IDs are validated or replaced and
+included in structured logs. Contract contents, credentials, and exception
+stack traces are not intentionally logged.
+
+Before production:
+
+- Set `APP_ENVIRONMENT=production`, use HTTPS end-to-end, and configure
+  `CORS_ORIGINS` to exact trusted origins. Wildcard origins are rejected.
+  Production mode disables interactive API documentation.
+- Store database, Redis, embedding, and LLM credentials in a secret manager;
+  use TLS/private networking for PostgreSQL and Redis. Do not commit `.env`.
+- Configure Redis availability and persistence/monitoring. Rate limiting fails
+  closed (503) when Redis is unavailable. Limits are per direct peer IP; if
+  running behind a proxy, configure a trusted proxy boundary before accepting
+  forwarded client IP headers.
+- Use private, encrypted, access-controlled object storage for multiple
+  production workers. The included local storage is intended for development
+  and single-host deployment.
+- Verify backup, retention, and deletion policy. Document deletion removes the
+  file and soft-deletes metadata while preserving audits; no automated
+  retention/purge schedule or orphan-file reconciliation job is implemented.
+- Approve the LLM/embedding vendors for confidential contract/legal data and
+  review their retention and residency terms. The app does not claim model
+  accuracy or legally validated conclusions.
+- Apply migrations and run tests on the actual PostgreSQL/pgvector and Redis
+  versions used in production. Local automated checks used SQLite and did not
+  test managed-service permissions, network failures, or multi-worker load.
+
+Security tests and available regression tests are run with:
+
+```bash
+cd backend
+python -m pytest
+```
+
+The full test suite includes synthetic legal fixtures and mock analysis
+providers; it is not a penetration test or legal validation. PDF-dependent
+tests require PyMuPDF to be installed.

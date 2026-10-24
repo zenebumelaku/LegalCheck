@@ -105,12 +105,15 @@ def ingest_legal_source(
     db.add(source)
     try:
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
         try:
             storage.delete(storage_key)
         except OSError:
-            logger.exception("Failed to clean up an uncommitted legal source file")
+            logger.error(
+                "Failed to clean up uncommitted legal source after %s",
+                type(exc).__name__,
+            )
         raise
     db.refresh(source)
     return source, len(provisions)

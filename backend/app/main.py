@@ -13,18 +13,31 @@ from app.api.routes.legal_sources import router as legal_sources_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.middleware import UploadRequestSizeLimitMiddleware
+from app.core.request_context import RequestContextMiddleware
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title=settings.app_name)
+app = FastAPI(
+    title=settings.app_name,
+    debug=False,
+    docs_url=None if settings.app_environment == "production" else "/docs",
+    redoc_url=None if settings.app_environment == "production" else "/redoc",
+    openapi_url=(
+        None
+        if settings.app_environment == "production"
+        else "/openapi.json"
+    ),
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
     UploadRequestSizeLimitMiddleware,
     max_file_size=settings.max_upload_size_bytes,
@@ -94,10 +107,13 @@ async def unhandled_exception_handler(
     request: Request,
     exc: Exception,
 ) -> JSONResponse:
-    logger.exception(
+    logger.error(
         "Unhandled application exception",
-        exc_info=(type(exc), exc, exc.__traceback__),
-        extra={"method": request.method, "path": request.url.path},
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "exception_type": type(exc).__name__,
+        },
     )
     return JSONResponse(
         status_code=500,

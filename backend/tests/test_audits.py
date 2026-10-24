@@ -290,6 +290,15 @@ def test_organization_audits_require_membership(audit_client) -> None:
             membership_role="member",
         )
     )
+    outsider = db.scalar(select(User).where(User.email == "audit-org-outsider@example.com"))
+    assert outsider is not None
+    db.add(
+        OrganizationMembership(
+            organization_id=organization.id,
+            user_id=outsider.id,
+            membership_role="viewer",
+        )
+    )
     document = Document(
         owner=owner,
         organization=organization,
@@ -312,7 +321,52 @@ def test_organization_audits_require_membership(audit_client) -> None:
         headers={"Authorization": f"Bearer {outsider_token}"},
     )
     assert accessible.status_code == 200
-    assert denied.status_code == 404
+    assert denied.status_code == 403
+
+
+def test_unauthenticated_users_cannot_access_audit_or_findings(audit_client) -> None:
+    client, db, _, _ = audit_client
+    owner = User(name="Protected Audit User", email="protected-audit@example.com", password_hash="test")
+    db.add(owner)
+    db.flush()
+    document = Document(
+        owner=owner,
+        original_filename="protected.docx",
+        storage_key="docs/protected",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        file_size=10,
+        document_type="docx",
+    )
+    audit = Audit(document=document, requester=owner)
+    db.add(audit)
+    db.commit()
+
+    for path in (
+        "/api/v1/audits",
+        f"/api/v1/audits/{audit.id}",
+        f"/api/v1/audits/{audit.id}/status",
+        f"/api/v1/audits/{audit.id}/findings",
+    ):
+        assert client.get(path).status_code == 401
+
+    assert client.post(
+        "/api/v1/audits",
+        json={"document_id": str(document.id)},
+    ).status_code == 401
+
+
+def test_audit_pagination_bounds_are_validated(audit_client) -> None:
+    client, _, _, _ = audit_client
+    _, token = _register(client, "audit-pagination@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get(
+        "/api/v1/audits?limit=101",
+        headers=headers,
+    ).status_code == 422
+    assert client.get(
+        "/api/v1/audits?offset=1000001",
+        headers=headers,
+    ).status_code == 422
 
 
 def test_invalid_transition_and_processing_failure_do_not_complete(audit_client) -> None:

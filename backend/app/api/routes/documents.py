@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_organization_membership
 from app.core.config import settings
+from app.core.rate_limit import enforce_upload_rate_limit
 from app.db.models import Document, OrganizationMembership, User
 from app.db.session import get_db
 from app.schemas.documents import (
@@ -157,6 +158,7 @@ def _get_accessible_document(
     "/upload",
     response_model=DocumentUploadResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_upload_rate_limit)],
 )
 def upload_document(
     file: UploadFile = File(...),
@@ -256,7 +258,7 @@ def upload_document(
 def list_documents(
     organization_id: Optional[uuid.UUID] = None,
     limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> DocumentListResponse:

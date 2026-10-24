@@ -1,7 +1,13 @@
 import json
 import logging
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any
+
+correlation_id_context: ContextVar[str] = ContextVar(
+    "correlation_id",
+    default="-",
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -11,12 +17,11 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
+            "correlation_id": correlation_id_context.get(),
         }
-        for field in ("method", "path"):
+        for field in ("method", "path", "status_code", "exception_type"):
             if hasattr(record, field):
                 payload[field] = getattr(record, field)
-        if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload)
 
 

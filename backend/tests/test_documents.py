@@ -5,6 +5,7 @@ from uuid import UUID
 
 import fitz
 import pytest
+import stat
 from docx import Document as DocxDocument
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -124,6 +125,8 @@ def test_upload_pdf_extracts_text_and_keeps_storage_private(
     assert len(stored_files) == 1
     assert stored_files[0].name != "Employment contract.pdf"
     assert stored_files[0].read_bytes() == pdf_content
+    assert stat.S_IMODE(stored_files[0].stat().st_mode) == 0o600
+    assert stat.S_IMODE((tmp_path / "private-files").stat().st_mode) == 0o700
 
 
 def test_upload_docx_preserves_paragraph_references_without_fake_page_number(

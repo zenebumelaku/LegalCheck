@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, get_organization_membership
 from app.core.config import settings
+from app.core.rate_limit import enforce_audit_rate_limit
 from app.db.models import (
     Audit,
     Document,
@@ -96,7 +97,12 @@ def _mark_queue_failure(db: Session, audit_id: UUID) -> None:
     db.commit()
 
 
-@router.post("", response_model=AuditResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "",
+    response_model=AuditResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(enforce_audit_rate_limit)],
+)
 def create_audit(
     payload: AuditCreateRequest,
     db: Session = Depends(get_db),
@@ -111,10 +117,13 @@ def create_audit(
     )
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found.")
-    if document.document_type not in {"pdf", "docx"}:
+    if (
+        document.document_type not in {"pdf", "docx"}
+        or document.processing_status not in {"completed", "warning"}
+    ):
         raise HTTPException(
             status_code=422,
-            detail="Only PDF and DOCX documents can be audited.",
+            detail="Only successfully extracted PDF and DOCX documents can be audited.",
         )
     if document.organization_id is not None:
         get_organization_membership(
@@ -155,7 +164,7 @@ def create_audit(
 @router.get("", response_model=AuditListResponse)
 def list_audits(
     limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=1_000_000),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> AuditListResponse:
@@ -293,7 +302,12 @@ def get_audit_findings(
     )
 
 
-@router.post("/{audit_id}/retry", response_model=AuditResponse, status_code=202)
+@router.post(
+    "/{audit_id}/retry",
+    response_model=AuditResponse,
+    status_code=202,
+    dependencies=[Depends(enforce_audit_rate_limit)],
+)
 def retry_audit(
     audit_id: UUID,
     db: Session = Depends(get_db),
