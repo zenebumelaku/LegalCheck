@@ -17,6 +17,7 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
     size: number;
     format: 'PDF' | 'DOCX' | 'TXT';
     content: string;
+    file?: File;
     isSample?: boolean;
     sampleId?: string;
   } | null>(null);
@@ -54,13 +55,8 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
     setProgressStatus('Uploading document and parsing textual structure...');
 
     try {
-      await new Promise(r => setTimeout(r, 600));
       setSubmissionProgress(45);
-      setProgressStatus('Cross-referencing statutory articles in Labour Proclamation No. 1156/2019...');
-
-      await new Promise(r => setTimeout(r, 700));
-      setSubmissionProgress(80);
-      setProgressStatus('Classifying severity levels and generating audit citations...');
+      setProgressStatus('Submitting the document for backend extraction and audit processing...');
 
       const created = await AuditService.createAudit({
         documentName: fileData.name,
@@ -70,13 +66,13 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
         fileFormat: fileData.format,
         reviewOptions,
         description: description.trim() || undefined,
-        rawText: fileData.content
+        rawText: fileData.content,
+        file: fileData.file
       });
 
       setSubmissionProgress(100);
-      setProgressStatus('Audit finalized successfully. Redirecting to findings...');
+      setProgressStatus('Audit submitted successfully. Opening audit status...');
 
-      await new Promise(r => setTimeout(r, 500));
       onNavigate(`/audits/${created.id}`);
     } catch (err) {
       setIsSubmitting(false);
@@ -165,7 +161,7 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
             <h2 className="text-sm font-bold text-slate-900 mb-1">Step 1: Select Employment Contract</h2>
             <p className="text-xs text-slate-500 mb-4">
-              Upload your agreement or pick a pre-loaded real Ethiopian business scenario.
+              Upload an agreement. Pre-loaded scenarios are available when demo fallback is enabled.
             </p>
 
             <FileUploadDropzone

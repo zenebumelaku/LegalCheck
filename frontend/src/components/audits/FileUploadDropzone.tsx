@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Upload, FileText, CheckCircle2, AlertCircle, X, Sparkles, BookOpen } from 'lucide-react';
 import { formatBytes } from '../../lib/utils';
 import { SAMPLE_ETHIOPIAN_CONTRACTS, SampleContract } from '../../data/sample-contracts';
+import { isDemoFallbackEnabled } from '../../lib/api-client';
 
 interface FileUploadDropzoneProps {
   selectedFile: {
@@ -9,6 +10,7 @@ interface FileUploadDropzoneProps {
     size: number;
     format: 'PDF' | 'DOCX' | 'TXT';
     content: string;
+    file?: File;
     isSample?: boolean;
     sampleId?: string;
   } | null;
@@ -17,6 +19,7 @@ interface FileUploadDropzoneProps {
     size: number;
     format: 'PDF' | 'DOCX' | 'TXT';
     content: string;
+    file?: File;
     isSample?: boolean;
     sampleId?: string;
   }) => void;
@@ -31,6 +34,7 @@ export function FileUploadDropzone({
   const [isDragOver, setIsDragOver] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const demoFallbackEnabled = isDemoFallbackEnabled();
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -43,11 +47,15 @@ export function FileUploadDropzone({
 
   const processFile = (file: File) => {
     setErrorMessage(null);
-    const validExtensions = ['.pdf', '.docx', '.txt'];
+    const validExtensions = demoFallbackEnabled ? ['.pdf', '.docx', '.txt'] : ['.pdf', '.docx'];
     const ext = '.' + file.name.split('.').pop()?.toLowerCase();
 
     if (!validExtensions.includes(ext)) {
-      setErrorMessage('Unsupported file format. Please upload a PDF, DOCX, or plain text (.txt) employment agreement.');
+      setErrorMessage(
+        demoFallbackEnabled
+          ? 'Unsupported file format. Please upload a PDF, DOCX, or plain text (.txt) employment agreement.'
+          : 'Backend audits require a PDF or DOCX employment agreement.'
+      );
       return;
     }
 
@@ -60,15 +68,24 @@ export function FileUploadDropzone({
     const format: 'PDF' | 'DOCX' | 'TXT' =
       ext === '.pdf' ? 'PDF' : ext === '.docx' ? 'DOCX' : 'TXT';
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = (e.target?.result as string) || '';
+    const selectFile = (content: string) => {
       onFileSelect({
         name: file.name,
         size: file.size,
         format,
-        content: text || `CONTRACT OF EMPLOYMENT\n\nParties: Employer and Employee.\nFile: ${file.name}\nSize: ${formatBytes(file.size)}\n\nTerms of employment in accordance with Ethiopian Labour Proclamation No. 1156/2019. Probation period of 60 working days.`
+        content,
+        file
       });
+    };
+
+    if (format !== 'TXT') {
+      selectFile('');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      selectFile((e.target?.result as string) || '');
     };
     reader.onerror = () => {
       setErrorMessage('Failed to read the document. Please try again.');
@@ -120,7 +137,7 @@ export function FileUploadDropzone({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.docx,.txt"
+            accept={demoFallbackEnabled ? '.pdf,.docx,.txt' : '.pdf,.docx'}
             onChange={handleFileChange}
             className="hidden"
           />
@@ -133,7 +150,7 @@ export function FileUploadDropzone({
             Click to upload or drag & drop your employment agreement
           </h3>
           <p className="mt-1 text-xs text-slate-500 max-w-sm mx-auto">
-            Supported formats: PDF, DOCX, or TXT (Max 10 MB). Your file is processed securely for Labour Proclamation No. 1156/2019 compliance.
+            Supported formats: PDF and DOCX (Max 10 MB){demoFallbackEnabled ? ', or TXT in demo mode' : ''}. Your file is processed securely for Labour Proclamation No. 1156/2019 compliance.
           </p>
         </div>
       ) : (
@@ -181,40 +198,42 @@ export function FileUploadDropzone({
       )}
 
       {/* Verified Sample Contracts for Instant Testing */}
-      <div className="pt-2">
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 mb-3">
-          <Sparkles className="w-4 h-4 text-emerald-600" />
-          <span>Or Choose a Verified Ethiopian Business Employment Contract Template</span>
-        </div>
+      {demoFallbackEnabled && (
+        <div className="pt-2">
+          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 mb-3">
+            <Sparkles className="w-4 h-4 text-emerald-600" />
+            <span>Or Choose a Verified Ethiopian Business Employment Contract Template</span>
+          </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {SAMPLE_ETHIOPIAN_CONTRACTS.map(sample => (
-            <div
-              key={sample.id}
-              onClick={() => handleSampleSelect(sample)}
-              className={`p-3.5 rounded-lg border text-left cursor-pointer transition-all ${
-                selectedFile?.sampleId === sample.id
-                  ? 'border-emerald-600 bg-emerald-50/40 ring-1 ring-emerald-600'
-                  : 'border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50'
-              }`}
-            >
-              <div className="text-xs font-bold text-slate-900 mb-1 line-clamp-1">
-                {sample.title}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {SAMPLE_ETHIOPIAN_CONTRACTS.map(sample => (
+              <div
+                key={sample.id}
+                onClick={() => handleSampleSelect(sample)}
+                className={`p-3.5 rounded-lg border text-left cursor-pointer transition-all ${
+                  selectedFile?.sampleId === sample.id
+                    ? 'border-emerald-600 bg-emerald-50/40 ring-1 ring-emerald-600'
+                    : 'border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50'
+                }`}
+              >
+                <div className="text-xs font-bold text-slate-900 mb-1 line-clamp-1">
+                  {sample.title}
+                </div>
+                <div className="text-[11px] text-slate-500 mb-2">
+                  Org: {sample.organization}
+                </div>
+                <p className="text-[11px] text-slate-600 line-clamp-2 leading-relaxed mb-3">
+                  {sample.description}
+                </p>
+                <div className="text-[10px] text-emerald-700 font-semibold flex items-center gap-1">
+                  <BookOpen className="w-3 h-3" />
+                  <span>Load This Contract</span>
+                </div>
               </div>
-              <div className="text-[11px] text-slate-500 mb-2">
-                Org: {sample.organization}
-              </div>
-              <p className="text-[11px] text-slate-600 line-clamp-2 leading-relaxed mb-3">
-                {sample.description}
-              </p>
-              <div className="text-[10px] text-emerald-700 font-semibold flex items-center gap-1">
-                <BookOpen className="w-3 h-3" />
-                <span>Load This Contract</span>
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

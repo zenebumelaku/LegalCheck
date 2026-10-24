@@ -162,8 +162,8 @@ export function RegisterPage({ onNavigate, onAuthSuccess }: AuthPageProps) {
       return;
     }
 
-    if (password.length < 8) {
-      setErrorMessage('Password must be at least 8 characters in length.');
+    if (password.length < 12) {
+      setErrorMessage('Password must be at least 12 characters in length.');
       return;
     }
 
@@ -286,7 +286,7 @@ export function RegisterPage({ onNavigate, onAuthSuccess }: AuthPageProps) {
                 required
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
+                placeholder="At least 12 characters"
                 className="w-full pl-9 pr-10 py-2.5 text-xs rounded-lg border border-slate-300 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-900"
               />
               <button

@@ -62,7 +62,7 @@ export default function App() {
     path.startsWith('/profile');
 
   // Match audit detail route: /audits/:id
-  const auditDetailMatch = path.match(/^\/audits\/(aud-eth-[a-zA-Z0-9_-]+)/);
+  const auditDetailMatch = path.match(/^\/audits\/([^/]+)$/);
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans">

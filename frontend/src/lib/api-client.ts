@@ -59,8 +59,9 @@ export async function apiRequest<T>(endpoint: string, options: ApiRequestOptions
     }
   }
 
+  const isMultipart = typeof FormData !== 'undefined' && customConfig.body instanceof FormData;
   const defaultHeaders: HeadersInit = {
-    'Content-Type': 'application/json',
+    ...(isMultipart ? {} : { 'Content-Type': 'application/json' }),
     Accept: 'application/json',
     ...authHeader,
     ...headers,
@@ -80,7 +81,14 @@ export async function apiRequest<T>(endpoint: string, options: ApiRequestOptions
       } catch {
         errorData = { message: response.statusText };
       }
-      throw new ApiError(errorData?.detail || errorData?.message || `HTTP ${response.status}`, response.status, errorData);
+      throw new ApiError(
+        errorData?.detail ||
+          errorData?.message ||
+          errorData?.error?.message ||
+          `HTTP ${response.status}`,
+        response.status,
+        errorData
+      );
     }
 
     if (response.status === 204) {

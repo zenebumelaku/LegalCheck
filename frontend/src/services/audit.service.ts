@@ -5,6 +5,14 @@ import { apiRequest, isDemoFallbackEnabled } from '../lib/api-client';
 
 const STORAGE_KEY = 'lc_audits_repository_v1';
 
+interface BackendDocument {
+  id: string;
+  original_filename: string;
+  file_size: number;
+  content_type: string;
+  document_type: string | null;
+}
+
 const INITIAL_SEED_AUDITS: AuditDocument[] = (() => {
   const seed1Id = 'aud-eth-2026-001';
   const contract1 = SAMPLE_ETHIOPIAN_CONTRACTS[0];
@@ -91,6 +99,7 @@ function normalizeAuditStatus(status: string | undefined): AuditDocument['status
       return 'PENDING';
     case 'extracting':
     case 'retrieving_sources':
+    case 'generating_report':
       return 'EXTRACTING_PROVISIONS';
     case 'analyzing':
       return 'ANALYZING';
@@ -256,6 +265,15 @@ export class AuditService {
     };
   }
 
+  private static applyBackendDocument(audit: AuditDocument, document: BackendDocument): AuditDocument {
+    return {
+      ...audit,
+      documentName: document.original_filename,
+      fileSize: document.file_size,
+      fileFormat: document.content_type === 'application/pdf' ? 'PDF' : 'DOCX'
+    };
+  }
+
   static async listAudits(params?: {
     query?: string;
     status?: string;
@@ -296,8 +314,18 @@ export class AuditService {
       return audits;
     }
 
-    const response = await apiRequest<{ items: any[]; limit: number; offset: number }>('/api/v1/audits');
-    const mapped = response.items.map(item => this.mapBackendAudit(item));
+    const [response, documents] = await Promise.all([
+      apiRequest<{ items: any[]; limit: number; offset: number }>('/api/v1/audits'),
+      apiRequest<{ items: BackendDocument[] }>('/api/v1/documents', {
+        params: { limit: 100 }
+      })
+    ]);
+    const documentsById = new Map(documents.items.map(document => [document.id, document]));
+    const mapped = response.items.map(item => {
+      const audit = this.mapBackendAudit(item);
+      const document = documentsById.get(String(item.document_id));
+      return document ? this.applyBackendDocument(audit, document) : audit;
+    });
 
     if (params?.status && params.status !== 'ALL') {
       return mapped.filter(a => a.status === params.status);
@@ -333,7 +361,8 @@ export class AuditService {
     }
 
     const audit = await apiRequest<any>(`/api/v1/audits/${id}`);
-    const mapped = this.mapBackendAudit(audit);
+    const document = await apiRequest<BackendDocument>(`/api/v1/documents/${audit.document_id}`);
+    const mapped = this.applyBackendDocument(this.mapBackendAudit(audit), document);
 
     if (audit.audit_status === 'completed' || audit.status === 'COMPLETED') {
       const findingsResponse = await apiRequest<{ findings: any[] }>('/api/v1/audits/' + id + '/findings');
@@ -362,48 +391,85 @@ export class AuditService {
     reviewOptions: AuditDocument['reviewOptions'];
     description?: string;
     rawText: string;
+    file?: File;
   }): Promise<AuditDocument> {
-    if (!isDemoFallbackEnabled()) {
-      throw new Error('Real document upload is required to create a backend-backed audit. Enable demo fallback explicitly in the frontend environment to use the local analysis path.');
+    if (isDemoFallbackEnabled()) {
+      const auditId = `aud-eth-${Date.now().toString().slice(-6)}`;
+      const analysis = auditContractText(auditId, payload.rawText, payload.reviewOptions);
+      const criticalCount = analysis.findings.filter(f => f.severity === 'CRITICAL').length;
+      const highCount = analysis.findings.filter(f => f.severity === 'HIGH').length;
+      const mediumCount = analysis.findings.filter(f => f.severity === 'MEDIUM').length;
+      const lowCount = analysis.findings.filter(f => f.severity === 'LOW').length;
+      const infoCount = analysis.findings.filter(f => f.severity === 'INFORMATIONAL').length;
+
+      const newAudit: AuditDocument = {
+        id: auditId,
+        userId: 'usr_eth_991',
+        documentName: payload.documentName,
+        documentType: payload.documentType,
+        documentLanguage: payload.documentLanguage,
+        fileSize: payload.fileSize,
+        fileFormat: payload.fileFormat,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        status: 'COMPLETED',
+        progressPercent: 100,
+        reviewOptions: payload.reviewOptions,
+        description: payload.description,
+        overallSummary: analysis.summary,
+        totalFindings: analysis.findings.length,
+        criticalCount,
+        highCount,
+        mediumCount,
+        lowCount,
+        infoCount,
+        findings: analysis.findings,
+        rawTextPreview: payload.rawText
+      };
+
+      const existing = this.getStoredAudits();
+      this.saveAudits([newAudit, ...existing]);
+      return newAudit;
     }
 
-    const auditId = `aud-eth-${Date.now().toString().slice(-6)}`;
-    const analysis = auditContractText(auditId, payload.rawText, payload.reviewOptions);
-    const criticalCount = analysis.findings.filter(f => f.severity === 'CRITICAL').length;
-    const highCount = analysis.findings.filter(f => f.severity === 'HIGH').length;
-    const mediumCount = analysis.findings.filter(f => f.severity === 'MEDIUM').length;
-    const lowCount = analysis.findings.filter(f => f.severity === 'LOW').length;
-    const infoCount = analysis.findings.filter(f => f.severity === 'INFORMATIONAL').length;
+    if (!payload.file || !['PDF', 'DOCX'].includes(payload.fileFormat)) {
+      throw new Error('Select a PDF or DOCX file to upload for a backend audit.');
+    }
 
-    const newAudit: AuditDocument = {
-      id: auditId,
-      userId: 'usr_eth_991',
-      documentName: payload.documentName,
+    const contentType = payload.fileFormat === 'PDF'
+      ? 'application/pdf'
+      : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const uploadFile = new File([payload.file], payload.file.name, { type: contentType });
+    const formData = new FormData();
+    formData.append('file', uploadFile);
+
+    const document = await apiRequest<{ id: string; original_filename: string; file_size: number; content_type: string }>(
+      '/api/v1/documents/upload',
+      { method: 'POST', body: formData }
+    );
+
+    const audit = await apiRequest<any>('/api/v1/audits', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: document.id,
+        review_options: {
+          jurisdiction: 'ET',
+          language: payload.documentLanguage.toLowerCase()
+        }
+      })
+    });
+
+    return {
+      ...this.mapBackendAudit(audit),
+      documentName: document.original_filename,
       documentType: payload.documentType,
       documentLanguage: payload.documentLanguage,
-      fileSize: payload.fileSize,
+      fileSize: document.file_size,
       fileFormat: payload.fileFormat,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      status: 'COMPLETED',
-      progressPercent: 100,
-      reviewOptions: payload.reviewOptions,
       description: payload.description,
-      overallSummary: analysis.summary,
-      totalFindings: analysis.findings.length,
-      criticalCount,
-      highCount,
-      mediumCount,
-      lowCount,
-      infoCount,
-      findings: analysis.findings,
-      rawTextPreview: payload.rawText
+      reviewOptions: payload.reviewOptions
     };
-
-    const existing = this.getStoredAudits();
-    this.saveAudits([newAudit, ...existing]);
-    return newAudit;
   }
 
   static async deleteAudit(id: string): Promise<boolean> {

@@ -65,6 +65,23 @@ export function AuditDetailPage({ auditId, onNavigate }: AuditDetailPageProps) {
     fetchAuditData();
   }, [auditId]);
 
+  useEffect(() => {
+    if (!audit || !['PENDING', 'ANALYZING', 'EXTRACTING_PROVISIONS'].includes(audit.status)) {
+      return;
+    }
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const updated = await AuditService.getAudit(auditId);
+        if (updated) setAudit(updated);
+      } catch (err) {
+        console.error('Failed to refresh audit status', err);
+      }
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [audit?.status, auditId]);
+
   const handleExportPdf = () => {
     if (!audit) return;
     setIsExportingPdf(true);

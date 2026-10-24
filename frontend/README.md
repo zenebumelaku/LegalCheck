@@ -41,7 +41,7 @@ AI-assisted legal compliance auditing platform for Ethiopian businesses, HR prof
 - **Styling**: Tailwind CSS v4 + Plus Jakarta Sans typography
 - **Icons**: Lucide React
 - **PDF Generation**: jsPDF
-- **API Architecture**: Centralized typed client with FastAPI integration and resilient offline/standalone fallback
+- **API Architecture**: Centralized FastAPI client; local sample analysis is available only through explicit demo-mode opt-in
 
 ---
 
