@@ -83,8 +83,8 @@ export async function apiRequest<T>(endpoint: string, options: ApiRequestOptions
       }
       throw new ApiError(
         errorData?.detail ||
-          errorData?.message ||
           errorData?.error?.message ||
+          errorData?.message ||
           `HTTP ${response.status}`,
         response.status,
         errorData

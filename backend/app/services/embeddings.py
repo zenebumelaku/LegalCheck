@@ -1,8 +1,8 @@
 import json
 import math
 from typing import Optional, Protocol, Sequence
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import httpx
 
 from app.core.config import Settings, settings
 from app.core.provider_url import validate_provider_url
@@ -53,36 +53,21 @@ class OpenAICompatibleEmbeddingProvider:
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if not texts:
             return []
-        request_body = json.dumps(
-            {
-                "model": self.model_name,
-                "input": list(texts),
-                "dimensions": self.dimensions,
-            }
-        ).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        request = Request(
-            f"{self.endpoint}/embeddings",
-            data=request_body,
-            headers=headers,
-            method="POST",
-        )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                response_body = response.read(_MAX_PROVIDER_RESPONSE_BYTES + 1)
-            if len(response_body) > _MAX_PROVIDER_RESPONSE_BYTES:
+            response = httpx.post(
+                f"{self.endpoint}/embeddings",
+                json={"model": self.model_name, "input": list(texts), "dimensions": self.dimensions},
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            if len(response.content) > _MAX_PROVIDER_RESPONSE_BYTES:
                 raise ValueError("Embedding provider response exceeded the size limit.")
-            payload = json.loads(response_body)
-        except (
-            HTTPError,
-            URLError,
-            TimeoutError,
-            OSError,
-            ValueError,
-            TypeError,
-        ) as exc:
+            payload = response.json()
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError, TypeError, OSError) as exc:
             raise EmbeddingProviderError(
                 "The configured embedding provider request failed."
             ) from exc

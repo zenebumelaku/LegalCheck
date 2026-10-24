@@ -1,7 +1,7 @@
 import json
 from typing import Optional, Protocol
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import httpx
 
 from app.core.config import Settings, get_settings
 from app.core.provider_url import validate_provider_url
@@ -60,47 +60,40 @@ class OpenAICompatibleLLMProvider:
         self.model_version = settings.llm_model_version
 
     def analyze_clause(self, clause: dict, evidence: list[dict]) -> str:
-        body = json.dumps(
-            {
-                "model": self.model_name,
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": json.dumps(
-                            {"contract_clause": clause, "retrieved_evidence": evidence},
-                            ensure_ascii=False,
-                        ),
-                    },
-                ],
-            }
-        ).encode("utf-8")
+        body = {
+            "model": self.model_name,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"contract_clause": clause, "retrieved_evidence": evidence},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        }
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
-        request = Request(self._url, data=body, headers=headers, method="POST")
         try:
-            with urlopen(request, timeout=self._timeout) as response:
-                response_body = response.read(1_000_001)
-            if len(response_body) > 1_000_000:
+            response = httpx.post(
+                self._url,
+                json=body,
+                headers=headers,
+                timeout=self._timeout,
+            )
+            response.raise_for_status()
+            if len(response.content) > 1_000_000:
                 raise ValueError("Provider response exceeds the configured limit.")
-            payload = json.loads(response_body)
+            payload = response.json()
             content = payload["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise ValueError("Provider returned non-text content.")
             return content
-        except (
-            HTTPError,
-            URLError,
-            TimeoutError,
-            OSError,
-            ValueError,
-            KeyError,
-            IndexError,
-            TypeError,
-        ) as exc:
+        except (httpx.HTTPError, httpx.TimeoutException, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
             raise LLMProviderError("The configured analysis provider failed.") from exc
 
 

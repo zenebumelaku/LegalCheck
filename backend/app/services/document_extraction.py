@@ -10,6 +10,7 @@ from docx.opc.exceptions import PackageNotFoundError
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from lxml.etree import XMLSyntaxError
+import defusedxml.ElementTree as _defused_et  # noqa: F401 – activates defusedxml protections
 
 MAX_EXTRACTED_CHARACTERS = 2_000_000
 

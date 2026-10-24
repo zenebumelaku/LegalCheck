@@ -19,6 +19,8 @@ class LocalPrivateFileStorage:
         self._root.chmod(0o700)
 
     def _path_for(self, key: str) -> Path:
+        if not key or key != Path(key).name or "/" in key or "\\" in key or key.startswith("."):
+            raise ValueError("Invalid private storage key.")
         path = (self._root / key).resolve()
         if path == self._root or self._root not in path.parents:
             raise ValueError("Invalid private storage key.")
