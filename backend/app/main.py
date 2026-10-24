@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -98,3 +99,4 @@ async def unhandled_exception_handler(
 
 
 app.include_router(health_router, prefix=settings.api_v1_prefix)
+app.include_router(auth_router, prefix=settings.api_v1_prefix)

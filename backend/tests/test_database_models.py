@@ -110,6 +110,11 @@ def test_unique_user_email_and_membership_constraint(db_session: Session) -> Non
         db_session.commit()
     db_session.rollback()
 
+    db_session.add(make_user("Case Variant", " Aster@example.test "))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
     db_session.add(
         OrganizationMembership(
             organization_id=organization.id,

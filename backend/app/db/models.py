@@ -18,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text as sql_text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -30,6 +31,11 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("email", name="uq_users_email"),
+        Index(
+            "uq_users_email_normalized",
+            sql_text("lower(trim(email))"),
+            unique=True,
+        ),
         CheckConstraint("length(name) > 0", name="ck_users_name_nonempty"),
         CheckConstraint("length(email) > 0", name="ck_users_email_nonempty"),
         CheckConstraint("length(role) > 0", name="ck_users_role_nonempty"),
@@ -68,6 +74,33 @@ class User(Base):
         back_populates="submitter",
         passive_deletes="all",
     )
+    auth_sessions: Mapped[List["AuthSession"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        Index("ix_auth_sessions_user_expiry", "user_id", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    user: Mapped["User"] = relationship(back_populates="auth_sessions")
 
 
 class Organization(Base):
