@@ -1,0 +1,6 @@
+{
+  "name": "LegalCheck Ethiopia",
+  "description": "AI-assisted legal compliance auditing platform for Ethiopian businesses, employment contracts, and Labour Proclamation No. 1156/2019.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
