@@ -305,3 +305,58 @@ compliance decisions or legal advice.
 Retrieval unit tests use clearly labeled synthetic fixtures and an in-memory
 mock embedding provider; no synthetic vector is presented as a real model
 output.
+
+## Contract analysis
+
+The analysis service is separate from API routes and is invoked with an
+existing pending `Audit`, its database session, private storage implementation,
+and an LLM provider. It extracts candidate English-language paragraphs for
+duration, compensation, working hours, leave, probation, termination, notice,
+confidentiality, and signatures. It preserves extracted wording and available
+page/paragraph references. Keyword extraction is a candidate finder, not proof
+that all clauses were found; OCR is not implemented by this analysis module.
+
+AI analysis is disabled unless explicitly configured. To use an approved
+OpenAI-compatible provider, set these values privately in `backend/.env` or a
+secret manager:
+
+```dotenv
+LLM_PROVIDER=openai_compatible
+LLM_API_URL=https://your-provider.example/v1
+LLM_API_KEY= # optional only for an unauthenticated private endpoint
+LLM_MODEL_NAME=your-approved-model
+LLM_MODEL_VERSION=provider-model-revision
+LLM_TIMEOUT_SECONDS=90
+MAX_CONTRACT_ANALYSIS_CHARACTERS=500000
+```
+
+The provider URL may be a base `/v1` URL (the service appends
+`/chat/completions`) or a full `/chat/completions` URL. The service sends
+extracted contract clauses and retrieved legal evidence to that provider.
+Use only a provider approved to process confidential contract data; keep keys
+server-side and never commit them. The provider must return a JSON object with
+the fields validated by `LLMClauseAnalysis`; invalid or unavailable provider
+responses fail the audit rather than completing it.
+
+For an integration from a trusted workflow, call `analyze_audit(audit_id,
+db=..., storage=..., llm_provider=...)` from
+`backend/app/services/compliance_analysis.py`. The returned `FinalAuditAnalysis`
+includes limitations and evidence metadata. The service persists findings only
+after validation. A citation must identify a provision returned by retrieval,
+match its source/article/sub-article, cite a source eligible for findings, and
+quote a substring of the saved provision text. Unsupported or uncertain
+citations downgrade the result to `insufficient_evidence`; provider failures
+record a safe failure code and do not mark the audit completed. The existing
+finding confidence column remains unset because model self-confidence is not
+calibrated as a probability.
+
+There is no verified, versioned Ethiopian employment-law rule set configured,
+so this module performs no deterministic legal-compliance checks and does not
+provide definitive legal advice. Review results and cited sources with a
+qualified Ethiopian legal professional. Unit tests use synthetic fixtures and
+mock providers; they do not validate a model or legal interpretation:
+
+```bash
+cd backend
+python -m pytest tests/test_compliance_analysis.py
+```
