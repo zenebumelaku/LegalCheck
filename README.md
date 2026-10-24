@@ -360,3 +360,68 @@ mock providers; they do not validate a model or legal interpretation:
 cd backend
 python -m pytest tests/test_compliance_analysis.py
 ```
+
+## Audit workflow and worker
+
+Audits are created from an existing, non-deleted PDF or DOCX document. The
+requester must own a personal document or have an allowed membership in its
+organization. Audit details, status, and findings repeat those access checks;
+organization documents require an active membership for each request. Audit
+creation returns `202 Accepted` with a queued status.
+
+Processing uses Redis and RQ. Start PostgreSQL and Redis, apply migrations, and
+run the API and worker in separate terminals:
+
+```bash
+# Terminal 1: PostgreSQL and Redis must be available.
+redis-server
+
+# Terminal 2
+cd backend
+alembic upgrade head
+python -m app.workers.audit_worker
+
+# Terminal 3
+cd backend
+uvicorn app.main:app --reload
+```
+
+Configure `DATABASE_URL` and `REDIS_URL` in `backend/.env`. The worker also
+needs the same private-storage configuration and an enabled LLM provider to
+complete analysis. It reads documents only through the configured private
+storage abstraction. Audit states progress through `queued`, `extracting`,
+`retrieving_sources`, `analyzing`, `generating_report`, and `completed`, or
+`failed`. Extraction warnings are retained on the audit. Findings and the
+completed state are committed atomically; failed processing does not leave
+partial findings.
+
+RQ jobs have a configurable timeout (`AUDIT_JOB_TIMEOUT_SECONDS`, default
+30 minutes). A worker crash can leave an audit in an active state; after the
+configured stale threshold (`AUDIT_STALE_AFTER_SECONDS`, default 35 minutes),
+an authorized user may call `POST /api/v1/audits/{audit_id}/retry`. Failed
+audits can also be explicitly retried. Retries are rejected if findings were
+already persisted. Workers claim only queued audits with a conditional database
+update, so duplicate job delivery cannot start a second run. A Redis enqueue
+failure is recorded as a failed audit and can be retried when Redis is
+available.
+
+Example audit request:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/audits \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"document_id":"<owned-document-uuid>","review_options":{"jurisdiction":"ET","review_date":"2026-10-24"}}'
+```
+
+Poll `GET /api/v1/audits/{audit_id}/status` and retrieve completed findings
+from `GET /api/v1/audits/{audit_id}/findings`. Analysis still requires a
+configured provider and verified applicable legal sources for supported
+citations; it does not imply legal advice. Integration tests use a test-only
+mock analyzer that only emits an insufficient-evidence outcome when no
+authoritative fixture is available. To run them:
+
+```bash
+cd backend
+python -m pytest tests/test_audits.py tests/test_compliance_analysis.py
+```

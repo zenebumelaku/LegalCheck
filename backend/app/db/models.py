@@ -422,7 +422,8 @@ class Audit(Base):
     __tablename__ = "audits"
     __table_args__ = (
         CheckConstraint(
-            "audit_status IN ('pending', 'processing', 'completed', 'failed')",
+            "audit_status IN ('queued', 'extracting', 'retrieving_sources', "
+            "'analyzing', 'generating_report', 'completed', 'failed')",
             name="ck_audits_status",
         ),
         CheckConstraint(
@@ -445,8 +446,12 @@ class Audit(Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    audit_status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
+    audit_status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
     review_options: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    processing_warnings: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)
+    processing_attempt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True)
+    )
     analysis_version: Mapped[Optional[str]] = mapped_column(String(100))
     model_identifier: Mapped[Optional[str]] = mapped_column(String(255))
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

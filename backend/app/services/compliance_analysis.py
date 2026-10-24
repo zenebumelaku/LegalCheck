@@ -3,8 +3,9 @@ import logging
 import re
 from datetime import date, datetime, timezone
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -128,7 +129,11 @@ def _validate_citations(
             or result.applicability_uncertain
         ):
             raise ValueError("Citation is not an authoritative retrieved provision.")
-        provision = db.get(LegalProvision, citation.provision_id)
+        provision = db.scalar(
+            select(LegalProvision)
+            .where(LegalProvision.id == citation.provision_id)
+            .execution_options(populate_existing=True)
+        )
         if (
             provision is None
             or provision.legal_source_id != citation.source_id
@@ -136,8 +141,19 @@ def _validate_citations(
             or provision.sub_article_reference != citation.sub_article_reference
         ):
             raise ValueError("Citation does not match the saved provision.")
-        source = db.get(LegalSource, citation.source_id)
-        if source is None or not source.eligible_for_findings:
+        source = db.scalar(
+            select(LegalSource)
+            .where(LegalSource.id == citation.source_id)
+            .execution_options(populate_existing=True)
+        )
+        review_date = result.review_date or date.today()
+        if (
+            source is None
+            or not source.eligible_for_findings
+            or source.effective_date is None
+            or source.effective_date > review_date
+            or (source.end_date is not None and source.end_date < review_date)
+        ):
             raise ValueError("Citation source is not eligible for findings.")
         if _normalized_text(citation.supporting_quote) not in _normalized_text(provision.text):
             raise ValueError("Citation quotation does not match the saved provision.")
@@ -204,7 +220,7 @@ def _persist_finding(
     evidence_status = "supported" if validated else "unverified"
     finding = Finding(
         audit_id=audit.id,
-        finding_type=f"{parsed.category}:{clause.category}",
+        finding_type=f"{parsed.category}:{clause.category}:{clause.clause_id}",
         severity=parsed.severity,
         # The legacy column is not populated: the model score is uncalibrated,
         # and must not be exposed as a probability of legal correctness.
@@ -238,18 +254,76 @@ def _persist_finding(
     )
 
 
-def _mark_failed(db: Session, audit_id: UUID, code: str) -> None:
+def _mark_failed(
+    db: Session,
+    audit_id: UUID,
+    code: str,
+    attempt_id: UUID,
+) -> None:
     db.rollback()
-    failed_audit = db.get(Audit, audit_id)
-    if failed_audit is None:
-        return
-    failed_audit.audit_status = "failed"
-    failed_audit.completed_at = None
-    failed_audit.failure_code = code
-    failed_audit.failure_message = (
-        "The analysis could not be completed. No completed legal review was produced."
+    db.execute(
+        update(Audit)
+        .where(
+            Audit.id == audit_id,
+            Audit.processing_attempt_id == attempt_id,
+            Audit.audit_status.in_(
+                {
+                    "extracting",
+                    "retrieving_sources",
+                    "analyzing",
+                    "generating_report",
+                }
+            ),
+        )
+        .values(
+            audit_status="failed",
+            processing_attempt_id=None,
+            completed_at=None,
+            failure_code=code,
+            failure_message=(
+                "The analysis could not be completed. No completed legal review was produced."
+            ),
+        )
     )
     db.commit()
+
+
+def _transition_audit(
+    db: Session,
+    audit_id: UUID,
+    expected_status: str,
+    new_status: str,
+    *,
+    attempt_id: Optional[UUID],
+    new_attempt_id: Optional[UUID] = None,
+    completed_at: Optional[datetime] = None,
+    commit: bool = True,
+) -> None:
+    values: dict = {"audit_status": new_status}
+    if new_attempt_id is not None:
+        values["processing_attempt_id"] = new_attempt_id
+    if new_status == "completed":
+        values["processing_attempt_id"] = None
+    if completed_at is not None:
+        values["completed_at"] = completed_at
+    statement = update(Audit).where(
+        Audit.id == audit_id,
+        Audit.audit_status == expected_status,
+    )
+    if attempt_id is None:
+        statement = statement.where(Audit.processing_attempt_id.is_(None))
+    else:
+        statement = statement.where(Audit.processing_attempt_id == attempt_id)
+    result = db.execute(
+        statement.values(**values)
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise ValueError(
+            f"Invalid audit transition from {expected_status} to {new_status}."
+        )
+    if commit:
+        db.commit()
 
 
 def analyze_audit(
@@ -258,14 +332,38 @@ def analyze_audit(
     db: Session,
     storage: PrivateFileStorage,
     llm_provider: Optional[LLMProvider] = None,
+    initial_status: str = "queued",
+    attempt_id: Optional[UUID] = None,
 ) -> FinalAuditAnalysis:
     audit = db.get(Audit, audit_id)
     if audit is None:
         raise ComplianceAnalysisError("audit_not_found", "Audit was not found.")
-    if audit.audit_status not in {"pending", "processing"}:
-        raise ComplianceAnalysisError("audit_not_pending", "Audit is not pending analysis.")
-    audit.audit_status = "processing"
+    if initial_status == "queued":
+        attempt_id = attempt_id or uuid4()
+        _transition_audit(
+            db,
+            audit_id,
+            "queued",
+            "extracting",
+            attempt_id=None,
+            new_attempt_id=attempt_id,
+        )
+    elif initial_status != "extracting":
+        raise ComplianceAnalysisError(
+            "audit_not_claimed",
+            "Audit is not in a processable state.",
+        )
+    else:
+        attempt_id = attempt_id or audit.processing_attempt_id
+    if attempt_id is None:
+        raise ComplianceAnalysisError(
+            "audit_attempt_missing",
+            "Audit processing attempt is unavailable.",
+        )
+    audit = db.get(Audit, audit_id)
+    audit.audit_status = "extracting"
     audit.started_at = datetime.now(timezone.utc)
+    audit.completed_at = None
     audit.failure_code = None
     audit.failure_message = None
     audit.model_identifier = None
@@ -273,9 +371,6 @@ def analyze_audit(
     db.commit()
 
     try:
-        provider = llm_provider or get_llm_provider()
-        audit.model_identifier = f"{provider.model_name}:{provider.model_version}"
-        db.commit()
         document = db.get(Document, audit.document_id)
         if document is None or document.deleted_at is not None:
             raise ValueError("Document is unavailable for analysis.")
@@ -291,12 +386,26 @@ def analyze_audit(
             raise ValueError("Extracted contract exceeds configured analysis limits.")
 
         clauses = extract_candidate_clauses(extraction.pages)
+        audit = db.get(Audit, audit_id)
+        audit.processing_warnings = list(
+            dict.fromkeys(
+                [*(audit.processing_warnings or []), *extraction.warnings]
+            )
+        )
+        db.commit()
+        _transition_audit(
+            db,
+            audit_id,
+            "extracting",
+            "retrieving_sources",
+            attempt_id=attempt_id,
+        )
+
         review_date = date.today()
         context = _review_context(audit, review_date)
         review_date = context.review_date or review_date
-        output_findings: list[ComplianceFinding] = []
         output_evidence: list[SupportingEvidence] = []
-
+        retrieved_per_clause: list[tuple[ExtractedClause, list[LegalEvidenceResult]]] = []
         for clause in clauses:
             retrieval = retrieve_legal_evidence(
                 clause.original_text,
@@ -304,7 +413,7 @@ def analyze_audit(
                 top_k=5,
                 db=db,
             )
-            retrieved = {result.provision_id: result for result in retrieval.results}
+            retrieved_per_clause.append((clause, retrieval.results))
             output_evidence.extend(
                 SupportingEvidence(
                     clause_id=clause.clause_id,
@@ -323,13 +432,34 @@ def analyze_audit(
                 )
                 for result in retrieval.results
             )
+
+        _transition_audit(
+            db,
+            audit_id,
+            "retrieving_sources",
+            "analyzing",
+            attempt_id=attempt_id,
+        )
+        provider = llm_provider or get_llm_provider()
+        audit = db.get(Audit, audit_id)
+        audit.model_identifier = f"{provider.model_name}:{provider.model_version}"
+        db.commit()
+        analyzed: list[
+            tuple[
+                ExtractedClause,
+                LLMClauseAnalysis,
+                list[tuple[CitationReference, LegalProvision]],
+            ]
+        ] = []
+        for clause, retrieved_results in retrieved_per_clause:
+            retrieved = {result.provision_id: result for result in retrieved_results}
             try:
                 raw_response = provider.analyze_clause(
                     clause.model_dump(mode="json"),
-                    [_evidence_payload(result) for result in retrieval.results],
+                    [_evidence_payload(result) for result in retrieved_results],
                 )
                 parsed = LLMClauseAnalysis.model_validate(json.loads(raw_response))
-            except (LLMProviderError, TypeError, ValueError) as exc:
+            except Exception as exc:
                 raise LLMProviderError(
                     "The configured analysis provider returned an invalid response."
                 ) from exc
@@ -342,7 +472,7 @@ def analyze_audit(
 
             has_authoritative_evidence = any(
                 item.authoritative and not item.applicability_uncertain
-                for item in retrieval.results
+                for item in retrieved_results
             )
             if (
                 parsed.evidence_assessment != "supporting"
@@ -351,16 +481,23 @@ def analyze_audit(
             ):
                 parsed = _make_uncertain(parsed)
                 validated = []
-            output_findings.append(
-                _persist_finding(db, audit, clause, parsed, validated)
-            )
+            analyzed.append((clause, parsed, validated))
 
-        db.flush()
-        audit.audit_status = "completed"
-        audit.completed_at = datetime.now(timezone.utc)
+        _transition_audit(
+            db,
+            audit_id,
+            "analyzing",
+            "generating_report",
+            attempt_id=attempt_id,
+        )
+        audit = db.get(Audit, audit_id)
+        output_findings = [
+            _persist_finding(db, audit, clause, parsed, validated)
+            for clause, parsed, validated in analyzed
+        ]
         audit.failure_code = None
         audit.failure_message = None
-        limitations = list(extraction.warnings)
+        limitations = list(audit.processing_warnings)
         limitations.append(
             "Clause extraction uses English keyword patterns and may miss clauses, "
             "including clauses written in other languages or unusual wording."
@@ -387,6 +524,15 @@ def analyze_audit(
             model_version=provider.model_version,
             review_date=review_date,
         )
+        _transition_audit(
+            db,
+            audit_id,
+            "generating_report",
+            "completed",
+            attempt_id=attempt_id,
+            completed_at=datetime.now(timezone.utc),
+            commit=False,
+        )
         db.commit()
         return result
     except (LLMProviderError, OSError, TypeError, ValueError, SQLAlchemyError) as exc:
@@ -396,7 +542,7 @@ def analyze_audit(
             else "analysis_failed"
         )
         try:
-            _mark_failed(db, audit_id, failure_code)
+            _mark_failed(db, audit_id, failure_code, attempt_id)
         except SQLAlchemyError:
             logger.exception("Could not persist failed audit status for audit %s", audit_id)
         logger.warning(
