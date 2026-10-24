@@ -233,12 +233,21 @@ def _persist_finding(
     db.add(finding)
     db.flush()
     for citation, provision in validated:
+        source = db.get(LegalSource, provision.legal_source_id)
+        if source is None:
+            raise ValueError("Citation source is unavailable.")
         db.add(
             FindingCitation(
                 finding_id=finding.id,
                 legal_provision_id=provision.id,
                 supporting_quote=citation.supporting_quote,
                 relevance_information=parsed.category,
+                source_title_snapshot=source.title,
+                source_version_snapshot=source.version_label,
+                source_url_snapshot=source.original_source_url,
+                article_number_snapshot=provision.article_number,
+                sub_article_reference_snapshot=provision.sub_article_reference,
+                provision_text_snapshot=provision.text,
             )
         )
     return ComplianceFinding(

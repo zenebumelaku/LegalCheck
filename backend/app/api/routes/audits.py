@@ -3,10 +3,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.api.audit_access import get_accessible_audit
 from app.api.dependencies import get_current_user, get_organization_membership
 from app.core.config import settings
 from app.core.rate_limit import enforce_audit_rate_limit
@@ -26,11 +27,18 @@ from app.schemas.audits import (
     AuditFindingResponse,
     AuditFindingsResponse,
     AuditListResponse,
+    AuditReportResponse,
     AuditResponse,
     AuditReviewOptions,
     AuditStatusResponse,
 )
 from app.schemas.compliance_analysis import AnalysisLimitations
+from app.services.audit_report import (
+    AuditReportUnavailable,
+    UnicodeReportFontUnavailable,
+    build_audit_report,
+    render_audit_report_pdf,
+)
 from app.services.audit_queue import enqueue_audit
 
 logger = logging.getLogger(__name__)
@@ -64,25 +72,6 @@ def _audit_response(audit: Audit) -> AuditResponse:
         failure_message=audit.failure_message,
         created_at=audit.created_at,
     )
-
-
-def _get_accessible_audit(db: Session, user: User, audit_id: UUID) -> Audit:
-    audit = db.get(Audit, audit_id)
-    if audit is None:
-        raise HTTPException(status_code=404, detail="Audit not found.")
-    document = db.get(Document, audit.document_id)
-    if document is None:
-        raise HTTPException(status_code=404, detail="Audit not found.")
-    if document.organization_id is not None:
-        get_organization_membership(
-            db,
-            user,
-            document.organization_id,
-            allowed_roles=_READABLE_ORGANIZATION_ROLES,
-        )
-    elif document.owner_user_id != user.id:
-        raise HTTPException(status_code=404, detail="Audit not found.")
-    return audit
 
 
 def _mark_queue_failure(db: Session, audit_id: UUID) -> None:
@@ -202,7 +191,7 @@ def get_audit(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> AuditResponse:
-    return _audit_response(_get_accessible_audit(db, user, audit_id))
+    return _audit_response(get_accessible_audit(db, user, audit_id))
 
 
 @router.get("/{audit_id}/status", response_model=AuditStatusResponse)
@@ -211,7 +200,7 @@ def get_audit_status(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> AuditStatusResponse:
-    audit = _get_accessible_audit(db, user, audit_id)
+    audit = get_accessible_audit(db, user, audit_id)
     return AuditStatusResponse(
         audit_id=audit.id,
         status=audit.audit_status,
@@ -229,7 +218,7 @@ def get_audit_findings(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> AuditFindingsResponse:
-    audit = _get_accessible_audit(db, user, audit_id)
+    audit = get_accessible_audit(db, user, audit_id)
     if audit.audit_status != "completed":
         raise HTTPException(
             status_code=409,
@@ -260,11 +249,31 @@ def get_audit_findings(
             citations.append(
                 AuditFindingCitation(
                     source_id=source.id,
-                    source_title=source.title,
-                    source_url=source.original_source_url,
-                    version_label=source.version_label,
-                    article_number=provision.article_number,
-                    sub_article_reference=provision.sub_article_reference,
+                    source_title=(
+                        citation.source_title_snapshot
+                        if citation.source_title_snapshot is not None
+                        else source.title
+                    ),
+                    source_url=(
+                        citation.source_url_snapshot
+                        if citation.source_url_snapshot is not None
+                        else source.original_source_url
+                    ),
+                    version_label=(
+                        citation.source_version_snapshot
+                        if citation.source_version_snapshot is not None
+                        else source.version_label
+                    ),
+                    article_number=(
+                        citation.article_number_snapshot
+                        if citation.article_number_snapshot is not None
+                        else provision.article_number
+                    ),
+                    sub_article_reference=(
+                        citation.sub_article_reference_snapshot
+                        if citation.sub_article_reference_snapshot is not None
+                        else provision.sub_article_reference
+                    ),
                     supporting_quote=citation.supporting_quote,
                     relevance_information=citation.relevance_information,
                 )
@@ -302,6 +311,61 @@ def get_audit_findings(
     )
 
 
+@router.get("/{audit_id}/report", response_model=AuditReportResponse)
+def get_audit_report(
+    audit_id: UUID,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> AuditReportResponse:
+    audit = get_accessible_audit(db, user, audit_id)
+    if audit.audit_status != "completed" or audit.completed_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Reports are available only after the audit completes.",
+        )
+    try:
+        report = build_audit_report(db, audit)
+    except AuditReportUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return report
+
+
+@router.get("/{audit_id}/report.pdf")
+def get_audit_report_pdf(
+    audit_id: UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    audit = get_accessible_audit(db, user, audit_id)
+    if audit.audit_status != "completed" or audit.completed_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Reports are available only after the audit completes.",
+        )
+    try:
+        report = build_audit_report(db, audit)
+        pdf_content = render_audit_report_pdf(
+            report,
+            font_path=settings.report_unicode_font_path,
+        )
+    except AuditReportUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UnicodeReportFontUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=pdf_content,
+        media_type="application/pdf",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'attachment; filename="legalcheck-audit-{audit.id}.pdf"',
+        },
+    )
+
+
 @router.post(
     "/{audit_id}/retry",
     response_model=AuditResponse,
@@ -314,7 +378,7 @@ def retry_audit(
     user: User = Depends(get_current_user),
     enqueue: Callable[[UUID], None] = Depends(get_audit_enqueue),
 ) -> AuditResponse:
-    audit = _get_accessible_audit(db, user, audit_id)
+    audit = get_accessible_audit(db, user, audit_id)
     now = datetime.now(timezone.utc)
     is_stale = (
         audit.audit_status in _PROCESSING_STATES

@@ -142,6 +142,11 @@ def test_analysis_retrieves_and_persists_valid_citation(db_session) -> None:
     finding = db_session.query(Finding).filter_by(audit_id=audit.id).one()
     citation = db_session.query(FindingCitation).filter_by(finding_id=finding.id).one()
     assert citation.legal_provision_id == provision.id
+    assert citation.source_title_snapshot == provision.legal_source.title
+    assert citation.source_version_snapshot == provision.legal_source.version_label
+    assert citation.source_url_snapshot == provision.legal_source.original_source_url
+    assert citation.article_number_snapshot == provision.article_number
+    assert citation.provision_text_snapshot == provision.text
     assert finding.confidence is None
     assert "uncalibrated" in " ".join(result.limitations.items).lower()
 

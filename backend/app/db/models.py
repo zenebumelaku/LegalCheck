@@ -539,6 +539,12 @@ class FindingCitation(Base):
     )
     supporting_quote: Mapped[Optional[str]] = mapped_column(Text)
     relevance_information: Mapped[Optional[str]] = mapped_column(Text)
+    source_title_snapshot: Mapped[Optional[str]] = mapped_column(String(500))
+    source_version_snapshot: Mapped[Optional[str]] = mapped_column(String(100))
+    source_url_snapshot: Mapped[Optional[str]] = mapped_column(String(2048))
+    article_number_snapshot: Mapped[Optional[str]] = mapped_column(String(100))
+    sub_article_reference_snapshot: Mapped[Optional[str]] = mapped_column(String(100))
+    provision_text_snapshot: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

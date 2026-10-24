@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = Field(default=10, gt=0, le=100)
     max_docx_uncompressed_size_mb: int = Field(default=50, gt=0, le=500)
     private_storage_path: Path = Path("var/private-documents")
+    report_unicode_font_path: Optional[Path] = None
     ocr_enabled: bool = False
     embedding_provider: Literal["disabled", "openai_compatible"] = "disabled"
     embedding_api_url: Optional[str] = None
@@ -45,6 +46,11 @@ class Settings(BaseSettings):
         gt=0,
         le=2_000_000,
     )
+
+    @field_validator("report_unicode_font_path", mode="before")
+    @classmethod
+    def empty_report_font_path_is_unset(cls, value: object) -> object:
+        return None if value == "" else value
 
     @model_validator(mode="after")
     def validate_audit_timeouts(self) -> "Settings":

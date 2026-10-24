@@ -428,6 +428,35 @@ cd backend
 python -m pytest tests/test_audits.py tests/test_compliance_analysis.py
 ```
 
+## Audit reports and finding feedback
+
+Completed audits provide a saved-result JSON report at
+`GET /api/v1/audits/{audit_id}/report` and a downloadable PDF at
+`GET /api/v1/audits/{audit_id}/report.pdf`. Both routes use the same document
+ownership and organization-membership checks as audit findings; responses are
+private and non-cacheable. They read the stored audit, finding, and citation
+records and never rerun extraction or an AI provider. Citation source title,
+version, URL, article reference, and provision text are snapshotted when a new
+finding is saved so later registry changes do not silently rewrite that
+report. Existing citations without snapshots use their linked source records.
+
+Users with access to a completed audit can submit feedback through
+`POST /api/v1/findings/{finding_id}/feedback`. Supported categories are
+`incorrect_finding`, `incorrect_citation`, `missing_issue`, and `other`;
+`other` requires a description, and descriptions are limited to 5,000
+characters.
+
+PDF output uses ReportLab. The built-in PDF font can render its supported
+Western character set. The repository does not bundle an Ethiopic font.
+For Amharic or other scripts outside that encoding, configure
+`REPORT_UNICODE_FONT_PATH` to a server-installed, licensed TrueType `.ttf` font
+that contains every character in the report. The font is embedded in generated
+PDFs. If no configured font covers the report's characters, the PDF endpoint
+returns a clear service-unavailable response instead of silently replacing
+characters; the JSON report preserves Unicode text. ReportLab does not perform
+complex-script shaping, so verify the chosen font and rendered output with
+native-language reviewers before production.
+
 ## Security posture and production checklist
 
 Implemented safeguards include Argon2id password hashing, normalized unique

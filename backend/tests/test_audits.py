@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from docx import Document as DocxDocument
 from fastapi.testclient import TestClient
 import pytest
+import reportlab
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,11 @@ from app.core.config import settings
 from app.db.models import (
     Audit,
     Document,
+    Feedback,
     Finding,
+    FindingCitation,
+    LegalProvision,
+    LegalSource,
     Organization,
     OrganizationMembership,
     User,
@@ -96,6 +101,83 @@ def _upload_docx(client: TestClient, token: str) -> dict:
     )
     assert response.status_code == 201
     return response.json()
+
+
+def _create_completed_report(
+    client: TestClient,
+    db: Session,
+    email: str,
+    *,
+    clause_text: str = "The employee salary will be paid monthly.",
+) -> tuple[dict, str, Audit, Finding]:
+    registration, token = _register(client, email)
+    user_id = UUID(registration["id"])
+    uploaded = _upload_docx(client, token)
+    document = db.get(Document, UUID(uploaded["id"]))
+    user = db.get(User, user_id)
+    assert document is not None and user is not None
+
+    source = LegalSource(
+        title="Historical source title",
+        law_number="fixture-only",
+        version_label="fixture-version-1",
+        source_type="statute",
+        jurisdiction="ET",
+        language="en",
+        legal_status="current",
+        verification_status="verified",
+        verified_by=user.id,
+        verified_at=datetime.now(timezone.utc),
+        original_source_url="https://example.test/fixture-law.pdf",
+        file_checksum="f" * 64,
+        source_file_storage_key=f"legal-sources/{uuid4()}.pdf",
+    )
+    provision = LegalProvision(
+        legal_source=source,
+        article_number="Fixture Article 4",
+        sub_article_reference="(a)",
+        section_title="Fixture heading",
+        text="Historical provision text from a test-only synthetic fixture.",
+        language="en",
+    )
+    now = datetime.now(timezone.utc)
+    audit = Audit(
+        document=document,
+        requester=user,
+        audit_status="completed",
+        review_options={"jurisdiction": "ET", "language": "en"},
+        processing_warnings=["Test-only extraction warning."],
+        analysis_version="test-report-v1",
+        model_identifier="test-only-model:fixture-v1",
+        started_at=now,
+        completed_at=now,
+    )
+    finding = Finding(
+        audit=audit,
+        finding_type="potential_legal_conflict:compensation:clause-1",
+        severity="medium",
+        clause_text=clause_text,
+        explanation="Test-only explanation of a potential concern.",
+        recommended_action="Ask qualified counsel to review this test fixture.",
+        evidence_status="supported",
+    )
+    citation = FindingCitation(
+        finding=finding,
+        legal_provision=provision,
+        supporting_quote="Historical provision text",
+        relevance_information="test-only fixture",
+        source_title_snapshot="Historical source title",
+        source_version_snapshot="fixture-version-1",
+        source_url_snapshot="https://example.test/fixture-law.pdf",
+        article_number_snapshot="Fixture Article 4",
+        sub_article_reference_snapshot="(a)",
+        provision_text_snapshot=(
+            "Historical provision text from a test-only synthetic fixture."
+        ),
+    )
+    db.add_all([audit, source, citation])
+    db.commit()
+    return registration, token, audit, finding
 
 
 @pytest.fixture
@@ -367,6 +449,233 @@ def test_audit_pagination_bounds_are_validated(audit_client) -> None:
         "/api/v1/audits?offset=1000001",
         headers=headers,
     ).status_code == 422
+
+
+def test_report_uses_saved_results_and_citation_snapshots_privately(
+    audit_client,
+) -> None:
+    client, db, _, _ = audit_client
+    registration, token, audit, finding = _create_completed_report(
+        client,
+        db,
+        "audit-report-owner@example.com",
+    )
+    citation = db.query(FindingCitation).filter_by(finding_id=finding.id).one()
+    source = db.get(LegalSource, citation.legal_provision.legal_source_id)
+    provision = citation.legal_provision
+    assert source is not None
+    source.title = "Changed later source title"
+    source.version_label = "later-version"
+    source.original_source_url = "https://example.test/later.pdf"
+    provision.article_number = "Later article"
+    provision.text = "Changed provision content"
+    db.commit()
+
+    report_response = client.get(
+        f"/api/v1/audits/{audit.id}/report",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert report_response.status_code == 200
+    assert report_response.headers["cache-control"] == "private, no-store"
+    report = report_response.json()
+    assert report["audit_id"] == str(audit.id)
+    assert report["audit_created_at"]
+    assert report["document"]["original_filename"] == "employment-contract.docx"
+    assert report["review_scope"]["jurisdiction"] == "ET"
+    assert report["summary"]["finding_count"] == 1
+    assert report["summary"]["severity_counts"] == {"medium": 1}
+    assert report["findings"][0]["clause_excerpt"] == (
+        "The employee salary will be paid monthly."
+    )
+    assert report["findings"][0]["explanation"].startswith("Test-only")
+    assert report["findings"][0]["citations"][0]["source_title"] == (
+        "Historical source title"
+    )
+    assert report["findings"][0]["citations"][0]["source_version"] == (
+        "fixture-version-1"
+    )
+    assert report["findings"][0]["citations"][0]["article_number"] == (
+        "Fixture Article 4"
+    )
+    assert report["findings"][0]["citations"][0]["provision_text"].startswith(
+        "Historical provision text"
+    )
+    assert report["processing_warnings"] == ["Test-only extraction warning."]
+    assert any(
+        "AI-assisted review" in item
+        for item in report["limitations"]["items"]
+    )
+    assert "qualified Ethiopian legal professional" in (
+        report["limitations"]["disclaimer"]
+    )
+
+    pdf_response = client.get(
+        f"/api/v1/audits/{audit.id}/report.pdf",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert pdf_response.status_code == 200
+    assert pdf_response.headers["content-type"] == "application/pdf"
+    assert pdf_response.headers["cache-control"] == "private, no-store"
+    assert pdf_response.content.startswith(b"%PDF-")
+    assert f"legalcheck-audit-{audit.id}.pdf" in pdf_response.headers[
+        "content-disposition"
+    ]
+
+    _, stranger_token = _register(client, "audit-report-stranger@example.com")
+    unauthorized_report = client.get(
+        f"/api/v1/audits/{audit.id}/report",
+        headers={"Authorization": f"Bearer {stranger_token}"},
+    )
+    unauthorized_pdf = client.get(
+        f"/api/v1/audits/{audit.id}/report.pdf",
+        headers={"Authorization": f"Bearer {stranger_token}"},
+    )
+    assert unauthorized_report.status_code == 404
+    assert unauthorized_pdf.status_code == 404
+    assert client.get(f"/api/v1/audits/{audit.id}/report").status_code == 401
+    assert client.get(f"/api/v1/audits/{audit.id}/report.pdf").status_code == 401
+
+
+def test_report_preserves_unicode_and_requires_font_for_ethiopic(audit_client) -> None:
+    client, db, _, _ = audit_client
+    _, token, audit, _ = _create_completed_report(
+        client,
+        db,
+        "audit-report-unicode@example.com",
+        clause_text="የሥራ ውል።",
+    )
+
+    response = client.get(
+        f"/api/v1/audits/{audit.id}/report",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["findings"][0]["clause_excerpt"] == "የሥራ ውል።"
+
+    pdf_response = client.get(
+        f"/api/v1/audits/{audit.id}/report.pdf",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert pdf_response.status_code == 503
+    assert "REPORT_UNICODE_FONT_PATH" in pdf_response.json()["error"]["message"]
+
+
+def test_unicode_font_configuration_generates_report_with_embedded_true_type_font(
+    audit_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, db, _, _ = audit_client
+    _, token, audit, _ = _create_completed_report(
+        client,
+        db,
+        "audit-report-accented@example.com",
+        clause_text="The employee signed at the café.",
+    )
+    vera_font = Path(reportlab.__file__).parent / "fonts" / "Vera.ttf"
+    monkeypatch.setattr(settings, "report_unicode_font_path", vera_font)
+
+    response = client.get(
+        f"/api/v1/audits/{audit.id}/report.pdf",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"%PDF-")
+    assert b"/FontFile2" in response.content
+
+
+def test_feedback_validates_category_and_description_and_checks_ownership(
+    audit_client,
+) -> None:
+    client, db, _, _ = audit_client
+    _, token, audit, finding = _create_completed_report(
+        client,
+        db,
+        "audit-feedback-owner@example.com",
+    )
+    feedback_url = f"/api/v1/findings/{finding.id}/feedback"
+    owner_headers = {"Authorization": f"Bearer {token}"}
+    valid = client.post(
+        feedback_url,
+        headers=owner_headers,
+        json={
+            "feedback_type": "incorrect_citation",
+            "description": "Please verify the cited source version.",
+        },
+    )
+    assert valid.status_code == 201
+    assert valid.json()["finding_id"] == str(finding.id)
+    assert valid.json()["feedback_type"] == "incorrect_citation"
+    assert valid.json()["description"] == "Please verify the cited source version."
+
+    invalid_category = client.post(
+        feedback_url,
+        headers=owner_headers,
+        json={"feedback_type": "made_up"},
+    )
+    missing_other_description = client.post(
+        feedback_url,
+        headers=owner_headers,
+        json={"feedback_type": "other"},
+    )
+    too_long = client.post(
+        feedback_url,
+        headers=owner_headers,
+        json={
+            "feedback_type": "missing_issue",
+            "description": "x" * 5001,
+        },
+    )
+    assert invalid_category.status_code == 422
+    assert missing_other_description.status_code == 422
+    assert too_long.status_code == 422
+
+    _, stranger_token = _register(client, "audit-feedback-stranger@example.com")
+    unauthorized = client.post(
+        feedback_url,
+        headers={"Authorization": f"Bearer {stranger_token}"},
+        json={"feedback_type": "incorrect_finding"},
+    )
+    assert unauthorized.status_code == 404
+    assert db.query(Feedback).count() == 1
+    assert client.post(
+        feedback_url,
+        json={"feedback_type": "incorrect_finding"},
+    ).status_code == 401
+
+
+def test_report_and_feedback_require_completed_audit(audit_client) -> None:
+    client, db, _, _ = audit_client
+    registration, token = _register(client, "audit-report-pending@example.com")
+    uploaded = _upload_docx(client, token)
+    document = db.get(Document, UUID(uploaded["id"]))
+    owner = db.get(User, UUID(registration["id"]))
+    assert document is not None and owner is not None
+    audit = Audit(document=document, requester=owner, audit_status="queued")
+    finding = Finding(
+        audit=audit,
+        finding_type="informational_observation:test:clause-1",
+        severity="informational",
+        clause_text="Test clause",
+        explanation="Pending",
+    )
+    db.add(finding)
+    db.commit()
+
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get(
+        f"/api/v1/audits/{audit.id}/report",
+        headers=headers,
+    ).status_code == 409
+    assert client.get(
+        f"/api/v1/audits/{audit.id}/report.pdf",
+        headers=headers,
+    ).status_code == 409
+    assert client.post(
+        f"/api/v1/findings/{finding.id}/feedback",
+        headers=headers,
+        json={"feedback_type": "incorrect_finding"},
+    ).status_code == 409
 
 
 def test_invalid_transition_and_processing_failure_do_not_complete(audit_client) -> None:
