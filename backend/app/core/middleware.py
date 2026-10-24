@@ -9,16 +9,17 @@ class UploadRequestSizeLimitMiddleware:
         app: ASGIApp,
         max_file_size: int,
         upload_path: str,
+        additional_upload_paths: tuple[str, ...] = (),
     ) -> None:
         self.app = app
         self.max_request_size = max_file_size + 1024 * 1024
-        self.upload_path = upload_path
+        self.upload_paths = {upload_path, *additional_upload_paths}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         is_upload = (
             scope["type"] == "http"
             and scope.get("method") == "POST"
-            and scope.get("path") == self.upload_path
+            and scope.get("path") in self.upload_paths
         )
         if not is_upload:
             await self.app(scope, receive, send)

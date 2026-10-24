@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -43,6 +44,8 @@ def test_user_organization_membership_relationships(db_session: Session) -> None
 
 def test_audit_findings_citations_and_feedback_are_related(db_session: Session) -> None:
     user = make_user("Aster", "aster@example.test")
+    db_session.add(user)
+    db_session.flush()
     document = Document(
         owner=user,
         original_filename="employment-contract.pdf",
@@ -56,6 +59,13 @@ def test_audit_findings_citations_and_feedback_are_related(db_session: Session) 
         source_type="statute",
         jurisdiction="ET",
         language="en",
+        legal_status="current",
+        verification_status="verified",
+        verified_by=user.id,
+        verified_at=datetime.now(timezone.utc),
+        original_source_url="https://example.com/test-source.pdf",
+        file_checksum="a" * 64,
+        source_file_storage_key="legal-sources/test.pdf",
     )
     provision = LegalProvision(
         legal_source=source,
@@ -242,3 +252,45 @@ def test_legal_source_versions_are_distinct_and_not_current_by_default(
     assert source_v1.id != source_v2.id
     assert source_v1.legal_status == "unknown"
     assert source_v1.verification_status == "unverified"
+
+
+def test_unverified_legal_source_cannot_be_used_as_finding_citation(
+    db_session: Session,
+) -> None:
+    user = make_user("Reviewer", "reviewer@example.test")
+    document = Document(
+        owner=user,
+        original_filename="contract.pdf",
+        storage_key="documents/review-test",
+        content_type="application/pdf",
+        file_size=10,
+    )
+    audit = Audit(document=document, requester=user)
+    source = LegalSource(
+        title="Unverified fixture source",
+        source_type="statute",
+        jurisdiction="test",
+        language="en",
+    )
+    provision = LegalProvision(
+        legal_source=source,
+        article_number="fixture",
+        text="Fixture text",
+        language="en",
+    )
+    finding = Finding(
+        audit=audit,
+        finding_type="fixture",
+        severity="low",
+        clause_text="Fixture",
+        explanation="Fixture",
+    )
+    db_session.add(
+        FindingCitation(
+            finding=finding,
+            legal_provision=provision,
+        )
+    )
+
+    with pytest.raises(ValueError, match="verified source marked current"):
+        db_session.commit()

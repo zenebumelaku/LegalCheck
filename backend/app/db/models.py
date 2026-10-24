@@ -17,14 +17,28 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    event,
     func,
+    select,
     text as sql_text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
+from pgvector.sqlalchemy import Vector
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class EmbeddingVector(TypeDecorator[list[float]]):
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect: Any) -> Any:
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(Vector(384))
+        return dialect.type_descriptor(JSON())
 
 
 class User(Base):
@@ -171,7 +185,7 @@ class LegalSource(Base):
             name="uq_legal_source_law_version",
         ),
         CheckConstraint(
-            "legal_status IN ('unknown', 'active', 'amended', 'repealed', 'superseded')",
+            "legal_status IN ('unknown', 'current', 'active', 'amended', 'repealed', 'superseded')",
             name="ck_legal_sources_status",
         ),
         CheckConstraint(
@@ -182,8 +196,13 @@ class LegalSource(Base):
             "end_date IS NULL OR effective_date IS NULL OR end_date >= effective_date",
             name="ck_legal_sources_dates",
         ),
+        UniqueConstraint(
+            "source_file_storage_key",
+            name="uq_legal_sources_storage_key",
+        ),
         Index("ix_legal_sources_jurisdiction_type", "jurisdiction", "source_type"),
         Index("ix_legal_sources_effective_date", "effective_date"),
+        Index("uq_legal_sources_file_checksum", "file_checksum", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -199,6 +218,24 @@ class LegalSource(Base):
     version_label: Mapped[Optional[str]] = mapped_column(String(100))
     original_source_url: Mapped[Optional[str]] = mapped_column(String(2048))
     file_checksum: Mapped[Optional[str]] = mapped_column(String(128))
+    source_file_storage_key: Mapped[Optional[str]] = mapped_column(String(1024))
+    ingested_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            ondelete="RESTRICT",
+            name="fk_legal_sources_ingested_by_users",
+        ),
+    )
+    verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            ondelete="RESTRICT",
+            name="fk_legal_sources_verified_by_users",
+        ),
+    )
+    verification_notes: Mapped[Optional[str]] = mapped_column(Text)
     verification_status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="unverified"
     )
@@ -218,6 +255,18 @@ class LegalSource(Base):
         passive_deletes="all",
     )
 
+    @property
+    def eligible_for_findings(self) -> bool:
+        return (
+            self.verification_status == "verified"
+            and self.legal_status == "current"
+            and self.file_checksum is not None
+            and self.source_file_storage_key is not None
+            and self.verified_by is not None
+            and self.verified_at is not None
+            and self.original_source_url is not None
+        )
+
 
 class LegalProvision(Base):
     __tablename__ = "legal_provisions"
@@ -225,6 +274,7 @@ class LegalProvision(Base):
         UniqueConstraint(
             "legal_source_id",
             "article_number",
+            "sub_article_reference",
             "section_title",
             name="uq_legal_provision_source_article_section",
         ),
@@ -239,6 +289,7 @@ class LegalProvision(Base):
         nullable=False,
     )
     article_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    sub_article_reference: Mapped[Optional[str]] = mapped_column(String(100))
     section_title: Mapped[Optional[str]] = mapped_column(String(500))
     text: Mapped[str] = mapped_column(Text, nullable=False)
     page_number: Mapped[Optional[int]] = mapped_column(Integer)
@@ -252,6 +303,77 @@ class LegalProvision(Base):
         back_populates="legal_provision",
         passive_deletes="all",
     )
+
+
+Index(
+    "ix_legal_provisions_text_search",
+    func.to_tsvector("simple", LegalProvision.text),
+    postgresql_using="gin",
+).ddl_if(dialect="postgresql")
+
+
+class LegalProvisionChunk(Base):
+    __tablename__ = "legal_provision_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "provision_id",
+            "chunk_index",
+            "embedding_model",
+            "embedding_version",
+            name="uq_provision_chunk_model_version",
+        ),
+        CheckConstraint("chunk_index >= 0", name="ck_provision_chunks_index"),
+        CheckConstraint("length(chunk_text) > 0", name="ck_provision_chunks_text"),
+        CheckConstraint(
+            "length(embedding_model) > 0",
+            name="ck_provision_chunks_embedding_model",
+        ),
+        CheckConstraint(
+            "length(embedding_version) > 0",
+            name="ck_provision_chunks_embedding_version",
+        ),
+        CheckConstraint(
+            "page_number IS NULL OR page_number > 0",
+            name="ck_provision_chunks_page_number",
+        ),
+        Index("ix_provision_chunks_provision_id", "provision_id"),
+        Index(
+            "ix_provision_chunks_embedding_model_version",
+            "embedding_model",
+            "embedding_version",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    provision_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("legal_provisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
+    content_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    page_number: Mapped[Optional[int]] = mapped_column(Integer)
+    source_version_label: Mapped[Optional[str]] = mapped_column(String(100))
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    embedding_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    embedding: Mapped[Optional[List[float]]] = mapped_column(EmbeddingVector())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    provision: Mapped["LegalProvision"] = relationship()
+
+
+Index(
+    "ix_provision_chunks_embedding_search",
+    LegalProvisionChunk.embedding,
+    postgresql_using="hnsw",
+    postgresql_ops={"embedding": "vector_cosine_ops"},
+    postgresql_where=LegalProvisionChunk.embedding.is_not(None),
+)
 
 
 class Document(Base):
@@ -418,6 +540,43 @@ class FindingCitation(Base):
 
     finding: Mapped["Finding"] = relationship(back_populates="citations")
     legal_provision: Mapped["LegalProvision"] = relationship(back_populates="citations")
+
+
+@event.listens_for(FindingCitation, "before_insert")
+def require_verified_current_citation_source(
+    mapper: Any,
+    connection: Any,
+    target: FindingCitation,
+) -> None:
+    source_status = connection.execute(
+        select(
+            LegalSource.verification_status,
+            LegalSource.legal_status,
+            LegalSource.file_checksum,
+            LegalSource.source_file_storage_key,
+            LegalSource.verified_by,
+            LegalSource.verified_at,
+            LegalSource.original_source_url,
+        )
+        .join(
+            LegalProvision,
+            LegalProvision.legal_source_id == LegalSource.id,
+        )
+        .where(LegalProvision.id == target.legal_provision_id)
+    ).one_or_none()
+    if (
+        source_status is None
+        or source_status.verification_status != "verified"
+        or source_status.legal_status != "current"
+        or source_status.file_checksum is None
+        or source_status.source_file_storage_key is None
+        or source_status.verified_by is None
+        or source_status.verified_at is None
+        or source_status.original_source_url is None
+    ):
+        raise ValueError(
+            "A finding citation requires a verified source marked current."
+        )
 
 
 class Feedback(Base):

@@ -7,6 +7,8 @@ from typing import Protocol
 class PrivateFileStorage(Protocol):
     def store(self, key: str, content: bytes) -> None: ...
 
+    def read(self, key: str) -> bytes: ...
+
     def delete(self, key: str) -> None: ...
 
 
@@ -41,6 +43,10 @@ class LocalPrivateFileStorage:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
             raise
+
+    def read(self, key: str) -> bytes:
+        path = self._path_for(key)
+        return path.read_bytes()
 
     def delete(self, key: str) -> None:
         path = self._path_for(key)

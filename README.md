@@ -149,10 +149,159 @@ the metadata soft-deleted.
 
 This setup does not implement RAG or legal analysis. The database schema
 includes foundational audit and finding records, but not analysis workflows.
-Embeddings and vector retrieval are deferred to Part 6. Legal-source status is
-initialized to `unknown`; records are not considered current unless their
-status and verification are established explicitly.
+Retrieval supplies evidence candidates only; final legal judgments remain
+deferred. Legal-source status is initialized to `unknown`; records are not
+considered current unless their status and verification are established
+explicitly.
+
+## Legal source registry
+
+The public read endpoints are:
+
+- `GET /api/v1/legal-sources` — paginated registry, with optional `q`, `title`,
+  `law_number`, `article_number`, `language`, `source_type`, and `legal_status`
+  filters.
+- `GET /api/v1/legal-sources/search` — the same filters with an explicit search
+  route.
+- `GET /api/v1/legal-sources/{source_id}` — source provenance and review
+  metadata.
+- `GET /api/v1/legal-sources/{source_id}/provisions` — paginated provisions,
+  filterable by article, sub-article, and language.
+
+Ingestion and review are restricted to users with the server-assigned `admin`
+role. Import a source using `POST /api/v1/legal-sources/ingest` as
+`multipart/form-data`, with:
+
+- `file`: the source PDF (maximum `MAX_UPLOAD_SIZE_MB`).
+- `metadata_json`: JSON containing `title`, `law_number`, `source_type`,
+  `jurisdiction`, `language`, `version_label`, `original_source_url`, and
+  optional publication/effective/end dates.
+- `provisions_json`: a JSON array of curated provisions. Each has an
+  `article_number`, `text`, and optional `sub_article_reference`,
+  `section_title`, `page_number`, and `language`.
+
+The service validates PDF signature markers and MIME/extension agreement,
+computes a SHA-256 checksum, keeps the original PDF in private storage, and
+creates a new version record without replacing earlier records. An identical
+checksum or an already-used law-number/version-label pair is rejected. The
+initial verification status is `pending` and legal status is `unknown`.
+Provision references must be reviewed against the uploaded document; the
+service does not infer article boundaries or legal conclusions from raw PDF
+text.
+
+A different administrator must review the ingestion using
+`POST /api/v1/legal-sources/{source_id}/verify` with a `decision` of `verified`
+or `rejected`, a `legal_status` (`unknown`, `current`, `amended`, `repealed`,
+or `superseded`), and substantive `verification_notes`. The reviewer must
+confirm the source against an authoritative publication, validate the
+document/version and provisions, and assess amendments and applicability.
+Only a source that is verified and explicitly classified `current` is marked
+eligible for production findings; `unknown` remains ineligible. Rejected
+sources are excluded from public registry results. Status decisions are not
+automatically changed when a newer version is ingested.
+
+To import an actual Ethiopian employment instrument, first obtain the
+publication from an authoritative Ethiopian legal publisher or government
+source, independently confirm its citation, dates, amendments/repeal status,
+language, and the applicability period, then have one administrator ingest
+the original PDF and curated provision references. A second administrator
+must complete the review and record the evidence in notes. Use a distinct
+`version_label` and upload the changed original for each new version; never
+edit an existing version in place. No Labour Proclamation No. 1156/2019 PDF
+or article text is bundled or seeded by this project, and its current
+applicability has not been asserted by this implementation.
+
+Example import request after the source and provisions have been checked by
+the importer (replace placeholders only with verified source data):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/legal-sources/ingest \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F 'metadata_json={"title":"<verified title>","law_number":"<verified citation>","source_type":"proclamation","jurisdiction":"<verified jurisdiction>","language":"<verified language>","version_label":"<unique version label>","original_source_url":"<authoritative HTTP(S) URL>"}' \
+  -F 'provisions_json=[{"article_number":"<article reference>","sub_article_reference":"<optional sub-article>","section_title":"<verified heading>","text":"<transcribed provision>","page_number":1}]' \
+  -F 'file=@/secure/path/to/source.pdf;type=application/pdf'
+
+curl -X POST "http://127.0.0.1:8000/api/v1/legal-sources/<source-id>/verify" \
+  -H "Authorization: Bearer $SECOND_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"decision":"verified","legal_status":"unknown","verification_notes":"<describe authoritative verification and applicability evidence>"}'
+```
 
 # LegalCheck
 
 # LegalCheck
+
+## Legal retrieval and embeddings
+
+The retrieval layer uses PostgreSQL `pgvector` plus PostgreSQL full-text search.
+Apply the latest Alembic migration after installing PostgreSQL with pgvector
+available:
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+Use pgvector extension version 0.5 or newer for the HNSW index. The migration
+runs `CREATE EXTENSION IF NOT EXISTS vector`. The database role
+must be allowed to create the extension; on managed PostgreSQL where that is
+not permitted, have the database administrator enable pgvector first, then
+apply the migration. The migration adds a vector column sized for 384 values,
+a cosine HNSW index, and a GIN full-text index. Existing legal sources and
+provisions are unchanged; embeddings are generated only for verified sources.
+
+Embedding generation is disabled by default, so ordinary tests need no paid
+provider account. Configure an OpenAI-compatible embedding endpoint in
+`backend/.env` when you are ready to index real, verified source provisions:
+
+```dotenv
+EMBEDDING_PROVIDER=openai_compatible
+EMBEDDING_API_URL=https://your-provider.example/v1
+EMBEDDING_API_KEY= # optional for a private local endpoint; otherwise set privately
+EMBEDDING_MODEL_NAME=your-384-dimension-embedding-model
+EMBEDDING_MODEL_VERSION=provider-model-revision
+```
+
+The endpoint must implement `POST {EMBEDDING_API_URL}/embeddings`, accept
+`model`, `input`, and `dimensions: 384`, and return an OpenAI-compatible
+`data` list with indexed embedding vectors. Provider credentials must be kept
+in `.env` or a secret manager and must not be committed. Embedding model name
+and version are recorded on every chunk; changing either creates a separate
+index rather than mixing incompatible vectors. The database vector dimension
+is fixed at 384; changing it requires a planned schema migration and a
+matching provider. Indexing sends provision text to the configured embedding
+endpoint, so configure only a provider approved to process the source material.
+
+Once a source has passed the registry's independent verification workflow,
+generate its embeddings with:
+
+```bash
+cd backend
+python -m app.scripts.generate_legal_embeddings
+python -m app.scripts.generate_legal_embeddings --source-id <verified-source-uuid>
+```
+
+The script indexes only sources with `verification_status=verified`. It
+preserves source version, article, sub-article, heading, and page references in
+chunks. Provisions remain intact when they fit the configured chunk window;
+long provisions are split on paragraph/sentence boundaries with overlap and
+explicit common English exception/definition continuation markers. Chunk
+boundaries are not a legal interpretation: verify generated chunk text against
+the original document, especially for Amharic or other languages and long
+multi-part rules.
+
+`retrieve_legal_evidence(query, review_context, top_k, db=...)` combines exact
+article matching, keyword retrieval, and semantic ranking when a compatible
+provider is configured. A reranker may be supplied through its interface;
+none is enabled by default. `LegalReviewContext` supports review date,
+jurisdiction, language, source type, law number, and article filters. Review
+dates constrain retrieval to known effective/end-date intervals; missing
+dates and non-`current` legal statuses are surfaced as applicability
+uncertainty. Unverified/rejected sources are excluded by default. The optional
+`include_unverified` context flag is for controlled review only; such results
+are never marked authoritative. Retrieval returns evidence and scores, not
+compliance decisions or legal advice.
+
+Retrieval unit tests use clearly labeled synthetic fixtures and an in-memory
+mock embedding provider; no synthetic vector is presented as a real model
+output.

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.api.routes.auth import router as auth_router
 from app.api.routes.documents import router as documents_router
 from app.api.routes.health import router as health_router
+from app.api.routes.legal_sources import router as legal_sources_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.middleware import UploadRequestSizeLimitMiddleware
@@ -27,6 +28,9 @@ app.add_middleware(
     UploadRequestSizeLimitMiddleware,
     max_file_size=settings.max_upload_size_bytes,
     upload_path=f"{settings.api_v1_prefix}/documents/upload",
+    additional_upload_paths=(
+        f"{settings.api_v1_prefix}/legal-sources/ingest",
+    ),
 )
 
 
@@ -108,3 +112,4 @@ async def unhandled_exception_handler(
 app.include_router(health_router, prefix=settings.api_v1_prefix)
 app.include_router(auth_router, prefix=settings.api_v1_prefix)
 app.include_router(documents_router, prefix=settings.api_v1_prefix)
+app.include_router(legal_sources_router, prefix=settings.api_v1_prefix)
