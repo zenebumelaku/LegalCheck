@@ -1,6 +1,4 @@
-git remote add origin https://github.com/zenebumelaku/LegalCheck.git
-git branch -M main
-git push -u origin main# LegalCheck Ethiopia
+# LegalCheck Ethiopia
 
 Backend foundation for the LegalCheck Ethiopia employment-contract compliance
 platform. The initial setup provides a versioned FastAPI application, health
