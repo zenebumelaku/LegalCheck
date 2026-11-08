@@ -4,10 +4,19 @@ from typing import Optional, Protocol
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.core.provider_http import post_bounded_json
 from app.core.provider_url import validate_provider_url
 
 
 class LLMProviderError(RuntimeError):
+    pass
+
+
+class LLMProviderUnavailableError(LLMProviderError):
+    pass
+
+
+class LLMProviderRateLimitError(LLMProviderError):
     pass
 
 
@@ -104,22 +113,138 @@ class OpenAICompatibleLLMProvider:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         try:
-            response = httpx.post(
+            payload = post_bounded_json(
                 self._url,
-                json=body,
+                payload=body,
                 headers=headers,
                 timeout=self._timeout,
+                max_response_bytes=1_000_000,
             )
-            response.raise_for_status()
-            if len(response.content) > 1_000_000:
-                raise ValueError("Provider response exceeds the configured limit.")
-            payload = response.json()
             content = payload["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise ValueError("Provider returned non-text content.")
             return content
-        except (httpx.HTTPError, httpx.TimeoutException, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                raise LLMProviderRateLimitError(
+                    "The configured analysis provider rate limit was reached."
+                ) from exc
+            if exc.response.status_code >= 500:
+                raise LLMProviderUnavailableError(
+                    "The configured analysis provider is temporarily unavailable."
+                ) from exc
+            raise LLMProviderError(
+                "The configured analysis provider returned an error."
+            ) from exc
+        except (httpx.NetworkError, httpx.TimeoutException) as exc:
+            raise LLMProviderUnavailableError(
+                "The configured analysis provider is unavailable."
+            ) from exc
+        except (
+            httpx.HTTPError,
+            OSError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
             raise LLMProviderError("The configured analysis provider failed.") from exc
+
+
+class OllamaLLMProvider:
+    def __init__(self, settings: Settings) -> None:
+        if not settings.llm_api_url:
+            raise LLMProviderUnavailableError(
+                "LLM_API_URL is required for the ollama provider."
+            )
+        if settings.llm_api_key is not None:
+            raise LLMProviderError(
+                "The Ollama adapter does not support API-key authentication."
+            )
+        try:
+            validate_provider_url(settings.llm_api_url, has_api_key=False)
+        except ValueError as exc:
+            raise LLMProviderError(
+                "The Ollama provider URL is invalid or insecure."
+            ) from exc
+        if (
+            not settings.llm_model_name
+            or settings.llm_model_name == "not-configured"
+        ):
+            raise LLMProviderUnavailableError(
+                "LLM_MODEL_NAME must name an installed Ollama model."
+            )
+        self._url = settings.llm_api_url.rstrip("/")
+        if not self._url.endswith("/api/chat"):
+            self._url += "/api/chat"
+        self._timeout = settings.llm_timeout_seconds
+        self.model_name = settings.llm_model_name
+        self.model_version = settings.llm_model_version
+
+    def analyze_clause(self, clause: dict, evidence: list[dict]) -> str:
+        return self._complete(
+            _SYSTEM_PROMPT,
+            {"contract_clause": clause, "retrieved_evidence": evidence},
+        )
+
+    def answer_legal_question(self, question: str, evidence: list[dict]) -> str:
+        return self._complete(
+            _LEGAL_QUESTION_SYSTEM_PROMPT,
+            {"question": question, "retrieved_evidence": evidence},
+        )
+
+    def _complete(self, system_prompt: str, user_payload: dict) -> str:
+        try:
+            payload = post_bounded_json(
+                self._url,
+                payload={
+                    "model": self.model_name,
+                    "stream": False,
+                    "format": "json",
+                    "options": {"temperature": 0},
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {
+                            "role": "user",
+                            "content": json.dumps(user_payload, ensure_ascii=False),
+                        },
+                    ],
+                },
+                headers={"Content-Type": "application/json"},
+                timeout=self._timeout,
+                max_response_bytes=1_000_000,
+            )
+            content = payload["message"]["content"]
+            if not isinstance(content, str):
+                raise ValueError("Provider returned non-text content.")
+            return content
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                raise LLMProviderRateLimitError(
+                    "The Ollama provider rate limit was reached."
+                ) from exc
+            if exc.response.status_code == 404 or exc.response.status_code >= 500:
+                raise LLMProviderUnavailableError(
+                    "The Ollama service or configured model is unavailable."
+                ) from exc
+            raise LLMProviderError(
+                "The Ollama provider returned an error."
+            ) from exc
+        except (httpx.NetworkError, httpx.TimeoutException) as exc:
+            raise LLMProviderUnavailableError(
+                "The Ollama service is unavailable. Start Ollama and verify the configured URL."
+            ) from exc
+        except (
+            httpx.HTTPError,
+            OSError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
+            raise LLMProviderError(
+                "The Ollama provider failed or returned an invalid response."
+            ) from exc
 
 
 def get_llm_provider(settings: Optional[Settings] = None) -> LLMProvider:
@@ -128,4 +253,6 @@ def get_llm_provider(settings: Optional[Settings] = None) -> LLMProvider:
         raise LLMProviderError("AI analysis provider is disabled.")
     if current_settings.llm_provider == "openai_compatible":
         return OpenAICompatibleLLMProvider(current_settings)
+    if current_settings.llm_provider == "ollama":
+        return OllamaLLMProvider(current_settings)
     raise LLMProviderError("Configured AI analysis provider is unsupported.")

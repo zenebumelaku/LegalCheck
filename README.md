@@ -274,6 +274,27 @@ endpoint, so configure only a provider approved to process the source material.
 Remote embedding and analysis endpoints must use HTTPS; unauthenticated HTTP
 is accepted only for loopback development endpoints such as `localhost`.
 
+For fully local embeddings, the optional `sentence_transformers` provider
+uses `all-MiniLM-L6-v2`, which matches the database's 384-dimensional vectors.
+It is disabled by default and does not download model files during application
+startup, tests, or indexing. Install the optional package and explicitly
+provision the model directory before enabling it:
+
+```bash
+cd backend
+python -m pip install sentence-transformers
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('/absolute/path/all-MiniLM-L6-v2')"
+```
+
+Then configure `EMBEDDING_PROVIDER=sentence_transformers` and
+`EMBEDDING_LOCAL_MODEL_PATH=/absolute/path/all-MiniLM-L6-v2`. The provider loads
+only that existing directory (`local_files_only=True`) and fails clearly if
+the package/model is missing or it does not produce 384 dimensions. The
+existing `openai_compatible` provider remains available and unchanged.
+When replacing model files at the same path, update
+`EMBEDDING_MODEL_VERSION` and re-index so the new vectors are not mixed with
+the previous model revision.
+
 Once a source has passed the registry's independent verification workflow,
 generate its embeddings with:
 
@@ -395,6 +416,28 @@ Use only a provider approved to process confidential contract data; keep keys
 server-side and never commit them. The provider must return a JSON object with
 the fields validated by `LLMClauseAnalysis`; invalid or unavailable provider
 responses fail the audit rather than completing it.
+
+An optional local Ollama adapter also uses the existing LLM interface and is
+available to both contract analysis and legal Q&A. Install and start Ollama,
+explicitly install the model you choose with Ollama, then configure:
+
+```dotenv
+LLM_PROVIDER=ollama
+LLM_API_URL=http://localhost:11434
+LLM_MODEL_NAME=your-installed-model
+LLM_MODEL_VERSION=your-model-revision
+```
+
+The adapter calls Ollama's local `/api/chat` endpoint with a bounded response
+size and the configured timeout. It does not install models or start Ollama.
+An unavailable service or missing model is reported as unavailable; rate
+limits are reported distinctly. `LLM_PROVIDER=disabled` remains the default,
+and no example answer is returned if generation is unconfigured or fails.
+Local inference depends on the selected model and host resources; no free-tier,
+quota, or quality guarantee is implied. The existing
+`openai_compatible` provider remains available for externally configured
+services. Both options keep credentials server-side and require HTTPS for
+remote endpoints; unauthenticated HTTP is permitted only on loopback.
 
 For an integration from a trusted workflow, call `analyze_audit(audit_id,
 db=..., storage=..., llm_provider=...)` from

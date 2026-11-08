@@ -1,10 +1,11 @@
-import json
 import math
+from pathlib import Path
 from typing import Optional, Protocol, Sequence
 
 import httpx
 
 from app.core.config import Settings, settings
+from app.core.provider_http import post_bounded_json
 from app.core.provider_url import validate_provider_url
 
 EMBEDDING_DIMENSIONS = 384
@@ -25,6 +26,70 @@ class EmbeddingProviderConfigurationError(RuntimeError):
 
 class EmbeddingProviderError(RuntimeError):
     pass
+
+
+class SentenceTransformersEmbeddingProvider:
+    model_name = "sentence-transformers/all-MiniLM-L6-v2"
+
+    def __init__(
+        self,
+        *,
+        model_path: Path,
+        model_version: str,
+    ) -> None:
+        if not model_path.is_dir():
+            raise EmbeddingProviderConfigurationError(
+                "The local Sentence Transformers model directory does not exist."
+            )
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise EmbeddingProviderConfigurationError(
+                "Install the optional sentence-transformers package to use local embeddings."
+            ) from exc
+
+        try:
+            self._model = SentenceTransformer(
+                str(model_path),
+                local_files_only=True,
+                trust_remote_code=False,
+            )
+            dimensions = self._model.get_sentence_embedding_dimension()
+        except Exception as exc:
+            raise EmbeddingProviderConfigurationError(
+                "The local Sentence Transformers model could not be loaded. "
+                "Ensure all model files are present locally."
+            ) from exc
+        if dimensions != EMBEDDING_DIMENSIONS:
+            raise EmbeddingProviderConfigurationError(
+                f"The local embedding model must return {EMBEDDING_DIMENSIONS} dimensions."
+            )
+        self.model_version = model_version
+        self.dimensions = EMBEDDING_DIMENSIONS
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        try:
+            vectors = self._model.encode(
+                list(texts),
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+            if len(vectors) != len(texts):
+                raise ValueError("The local model returned an unexpected vector count.")
+            return [
+                validate_embedding(vector, expected_dimensions=self.dimensions)
+                for vector in vectors
+            ]
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingProviderError(
+                "The local embedding model returned invalid vectors."
+            ) from exc
+        except Exception as exc:
+            raise EmbeddingProviderError(
+                "The local embedding model failed to encode the input."
+            ) from exc
 
 
 class OpenAICompatibleEmbeddingProvider:
@@ -57,17 +122,20 @@ class OpenAICompatibleEmbeddingProvider:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            response = httpx.post(
+            payload = post_bounded_json(
                 f"{self.endpoint}/embeddings",
-                json={"model": self.model_name, "input": list(texts), "dimensions": self.dimensions},
+                payload={"model": self.model_name, "input": list(texts), "dimensions": self.dimensions},
                 headers=headers,
                 timeout=self.timeout_seconds,
+                max_response_bytes=_MAX_PROVIDER_RESPONSE_BYTES,
             )
-            response.raise_for_status()
-            if len(response.content) > _MAX_PROVIDER_RESPONSE_BYTES:
-                raise ValueError("Embedding provider response exceeded the size limit.")
-            payload = response.json()
-        except (httpx.HTTPError, httpx.TimeoutException, ValueError, TypeError, OSError) as exc:
+        except (
+            httpx.HTTPError,
+            httpx.TimeoutException,
+            ValueError,
+            TypeError,
+            OSError,
+        ) as exc:
             raise EmbeddingProviderError(
                 "The configured embedding provider request failed."
             ) from exc
@@ -131,6 +199,15 @@ def get_embedding_provider(
             model_name=configured_settings.embedding_model_name,
             model_version=configured_settings.embedding_model_version,
             api_key=api_key,
+        )
+    if configured_settings.embedding_provider == "sentence_transformers":
+        if configured_settings.embedding_local_model_path is None:
+            raise EmbeddingProviderConfigurationError(
+                "EMBEDDING_LOCAL_MODEL_PATH is required for sentence_transformers."
+            )
+        return SentenceTransformersEmbeddingProvider(
+            model_path=configured_settings.embedding_local_model_path,
+            model_version=configured_settings.embedding_model_version,
         )
     raise EmbeddingProviderConfigurationError(
         "The configured embedding provider is not supported."

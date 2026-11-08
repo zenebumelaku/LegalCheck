@@ -27,7 +27,12 @@ from app.services.legal_question_cache import (
     normalize_legal_question,
 )
 from app.services.legal_retrieval import retrieve_legal_evidence
-from app.services.llm_provider import LLMProviderError, get_llm_provider
+from app.services.llm_provider import (
+    LLMProviderError,
+    LLMProviderRateLimitError,
+    LLMProviderUnavailableError,
+    get_llm_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,10 @@ _INVALID_SUPPORT_ANSWER = (
 
 
 class LegalQuestionProviderUnavailable(RuntimeError):
+    pass
+
+
+class LegalQuestionProviderRateLimited(RuntimeError):
     pass
 
 
@@ -222,7 +231,7 @@ def answer_legal_question(
         provider = llm_provider or get_llm_provider()
     except LLMProviderError as exc:
         raise LegalQuestionProviderUnavailable(
-            "AI answer generation is unavailable. Configure an LLM provider and try again."
+            f"AI answer generation is unavailable: {exc}"
         ) from exc
 
     try:
@@ -230,8 +239,26 @@ def answer_legal_question(
             normalized_question,
             [_evidence_payload(result) for result in eligible_results],
         )
+    except LLMProviderUnavailableError as exc:
+        raise LegalQuestionProviderUnavailable(
+            f"The configured AI provider is unavailable: {exc}"
+        ) from exc
+    except LLMProviderRateLimitError as exc:
+        raise LegalQuestionProviderRateLimited(
+            "The configured AI provider rate limit was reached; retry later."
+        ) from exc
+    except LLMProviderError as exc:
+        logger.warning(
+            "Legal question answer generation failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise LegalQuestionProviderFailed(
+            "The AI provider could not produce a valid legal-question response."
+        ) from exc
+
+    try:
         parsed = LegalQuestionLLMResponse.model_validate(json.loads(raw_response))
-    except (LLMProviderError, json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
+    except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
         logger.warning(
             "Legal question answer generation failed",
             extra={"error_type": type(exc).__name__},

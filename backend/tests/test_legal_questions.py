@@ -14,7 +14,7 @@ from app.db.session import get_db
 from app.main import app
 from app.schemas.legal_questions import LegalQuestionAnswer
 from app.services.legal_question_cache import legal_question_cache_key
-from app.services.llm_provider import LLMProviderError
+from app.services.llm_provider import LLMProviderError, LLMProviderRateLimitError
 import app.services.legal_question_answering as legal_question_answering
 
 
@@ -531,6 +531,31 @@ def test_provider_unavailable_returns_clear_service_error(
 
     assert response.status_code == 503
     assert "AI answer generation is unavailable" in response.json()["error"]["message"]
+
+
+def test_provider_rate_limit_returns_clear_retryable_error(
+    legal_question_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    _add_source(db_session, user_id=user_id)
+
+    class RateLimitedProvider:
+        model_name = "synthetic-question-provider"
+        model_version = "fixture-v1"
+
+        def answer_legal_question(self, question: str, evidence: list[dict]) -> str:
+            raise LLMProviderRateLimitError("synthetic rate limit")
+
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: RateLimitedProvider(),
+    )
+    response = _ask(legal_question_client, token)
+
+    assert response.status_code == 429
+    assert "rate limit was reached" in response.json()["error"]["message"]
 
 
 def test_invalid_provider_response_returns_clear_upstream_error(

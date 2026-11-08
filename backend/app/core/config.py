@@ -20,16 +20,21 @@ class Settings(BaseSettings):
     private_storage_path: Path = Path("var/private-documents")
     report_unicode_font_path: Optional[Path] = None
     ocr_enabled: bool = False
-    embedding_provider: Literal["disabled", "openai_compatible"] = "disabled"
+    embedding_provider: Literal[
+        "disabled",
+        "openai_compatible",
+        "sentence_transformers",
+    ] = "disabled"
     embedding_api_url: Optional[str] = None
     embedding_api_key: Optional[SecretStr] = None
+    embedding_local_model_path: Optional[Path] = None
     embedding_model_name: str = Field(
         default="text-embedding-3-small",
         min_length=1,
         max_length=255,
     )
     embedding_model_version: str = Field(default="v1", min_length=1, max_length=100)
-    llm_provider: Literal["disabled", "openai_compatible"] = "disabled"
+    llm_provider: Literal["disabled", "openai_compatible", "ollama"] = "disabled"
     llm_api_url: Optional[str] = None
     llm_api_key: Optional[SecretStr] = None
     llm_model_name: str = Field(default="not-configured", min_length=1, max_length=255)
@@ -52,6 +57,11 @@ class Settings(BaseSettings):
     @field_validator("report_unicode_font_path", mode="before")
     @classmethod
     def empty_report_font_path_is_unset(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @field_validator("embedding_local_model_path", mode="before")
+    @classmethod
+    def empty_embedding_model_path_is_unset(cls, value: object) -> object:
         return None if value == "" else value
 
     @model_validator(mode="after")
