@@ -147,12 +147,12 @@ private file and soft-deletes metadata to preserve audit foreign keys. If
 physical cleanup fails, the API reports that cleanup is pending while leaving
 the metadata soft-deleted.
 
-This setup does not implement RAG or legal analysis. The database schema
-includes foundational audit and finding records, but not analysis workflows.
-Retrieval supplies evidence candidates only; final legal judgments remain
-deferred. Legal-source status is initialized to `unknown`; records are not
-considered current unless their status and verification are established
-explicitly.
+An authenticated legal-question endpoint provides preliminary,
+evidence-grounded AI answers when eligible legal sources and an LLM provider
+are available. It abstains when evidence is absent or uncertain; it does not
+make legal judgments. Contract audit analysis is a separate workflow.
+Legal-source status is initialized to `unknown`; records are not considered
+current unless their status and verification are established explicitly.
 
 ## Legal source registry
 
@@ -307,6 +307,31 @@ compliance decisions or legal advice.
 Retrieval unit tests use clearly labeled synthetic fixtures and an in-memory
 mock embedding provider; no synthetic vector is presented as a real model
 output.
+
+## Legal questions API
+
+Authenticated users can submit a question to
+`POST /api/v1/legal-questions/answer` with a JSON body containing `question`
+and an optional `review_context` using the fields described above. The
+endpoint reuses legal evidence retrieval and the configured LLM provider. It
+only sends evidence that is verified, marked current, and applicable to the
+requested review date; requests cannot opt into unverified sources. Responses
+include validated source/article references or an explicit
+`insufficient_evidence` status. If eligible evidence exists but no LLM
+provider is configured or it fails, the endpoint returns a service error
+rather than a canned answer.
+
+This endpoint does not read contract documents, create audits, or cache
+answers. No legal corpus is bundled with the application; production answers
+require independently verified source material in the existing legal-source
+registry. The endpoint and its tests do not establish legal correctness.
+
+Run its focused tests with:
+
+```bash
+cd backend
+python -m pytest tests/test_legal_questions.py
+```
 
 ## Contract analysis
 

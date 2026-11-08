@@ -10,6 +10,7 @@ from app.api.routes.audits import router as audits_router
 from app.api.routes.documents import router as documents_router
 from app.api.routes.findings import router as findings_router
 from app.api.routes.health import router as health_router
+from app.api.routes.legal_questions import router as legal_questions_router
 from app.api.routes.legal_sources import router as legal_sources_router
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -132,4 +133,5 @@ app.include_router(auth_router, prefix=settings.api_v1_prefix)
 app.include_router(documents_router, prefix=settings.api_v1_prefix)
 app.include_router(findings_router, prefix=settings.api_v1_prefix)
 app.include_router(audits_router, prefix=settings.api_v1_prefix)
+app.include_router(legal_questions_router, prefix=settings.api_v1_prefix)
 app.include_router(legal_sources_router, prefix=settings.api_v1_prefix)

@@ -361,22 +361,22 @@ def test_llm_provider_keeps_contract_text_in_untrusted_user_payload(monkeypatch)
     captured = {}
 
     class FakeResponse:
-        def __enter__(self):
-            return self
+        content = b'{"choices":[{"message":{"content":"{}"}}]}'
 
-        def __exit__(self, *args) -> None:
+        def raise_for_status(self) -> None:
             return None
 
-        def read(self, size: int = -1) -> bytes:
-            return b'{"choices":[{"message":{"content":"{}"}}]}'[:size]
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": "{}"}}]}
 
-    def fake_urlopen(request, timeout):
-        captured["body"] = json.loads(request.data)
-        captured["headers"] = request.headers
+    def fake_post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["body"] = json
+        captured["headers"] = headers
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr("app.services.llm_provider.urlopen", fake_urlopen)
+    monkeypatch.setattr("app.services.llm_provider.httpx.post", fake_post)
     provider = OpenAICompatibleLLMProvider(
         Settings(
             llm_provider="openai_compatible",
@@ -399,6 +399,44 @@ def test_llm_provider_keeps_contract_text_in_untrusted_user_payload(monkeypatch)
     assert retrieved_injection in messages[1]["content"]
     assert injected not in messages[0]["content"]
     assert captured["timeout"] > 0
+
+
+def test_llm_provider_uses_grounded_legal_question_prompt(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        content = b'{"choices":[{"message":{"content":"{}"}}]}'
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["url"] = url
+        captured["body"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.llm_provider.httpx.post", fake_post)
+    provider = OpenAICompatibleLLMProvider(
+        Settings(
+            llm_provider="openai_compatible",
+            llm_api_url="https://provider.example/v1",
+            llm_model_name="synthetic-test-model",
+        )
+    )
+    question = "What does this provision say?"
+    evidence = [{"provision_id": "fixture-id", "text": "Synthetic text."}]
+
+    assert provider.answer_legal_question(question, evidence) == "{}"
+
+    messages = captured["body"]["messages"]
+    assert captured["url"] == "https://provider.example/v1/chat/completions"
+    assert "Answer only" in messages[0]["content"]
+    assert "untrusted data" in messages[0]["content"]
+    assert question in messages[1]["content"]
+    assert "Synthetic text." in messages[1]["content"]
 
 
 def test_llm_provider_rejects_remote_plain_http_even_without_api_key() -> None:
