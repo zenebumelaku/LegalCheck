@@ -69,6 +69,7 @@ class LegalQuestionAnswer(BaseModel):
     citations: list[LegalQuestionCitation]
     model_name: Optional[str]
     model_version: Optional[str]
+    cache_hit: bool = False
     disclaimer: str = (
         "This AI-generated information is not legal advice and does not "
         "determine legal rights or obligations. Verify the cited source and "

@@ -321,10 +321,41 @@ include validated source/article references or an explicit
 provider is configured or it fails, the endpoint returns a service error
 rather than a canned answer.
 
-This endpoint does not read contract documents, create audits, or cache
-answers. No legal corpus is bundled with the application; production answers
-require independently verified source material in the existing legal-source
-registry. The endpoint and its tests do not establish legal correctness.
+This endpoint does not read contract documents or create audits. No legal
+corpus is bundled with the application; production answers require
+independently verified source material in the existing legal-source registry.
+The endpoint and its tests do not establish legal correctness.
+
+Supported answers use Redis cache-aside before retrieval, embedding, or LLM
+work. Cache keys are deterministic hashes of the normalized public question,
+review context, configured provider/model versions, cache version, prompt
+version, and a fingerprint of all legal-source, provision, and embedding-chunk
+records. A source/provision review or content change, or a new/re-indexed
+embedding chunk, therefore changes the knowledge-base fingerprint and makes
+old entries unreachable. `LEGAL_QA_CACHE_VERSION` supports explicit manual
+invalidation; increment it when answer logic or deployment-level configuration
+changes in a way not otherwise represented in the key. `LEGAL_QA_CACHE_TTL_SECONDS`
+defaults to 3600; setting it to 0 disables caching.
+
+The cache is fail-open: Redis read/write errors are logged and the request
+continues through normal retrieval and configured AI generation. It never
+turns a Redis outage into a cached or hardcoded answer. Only validated,
+supported answers are cached; insufficient-evidence results and failures are
+not. Cache entries contain public legal Q&A results only, never contract text
+or audit output. User identity is not part of the key because legal Q&A
+answers depend only on public legal sources and request context.
+
+To exercise the cache against a real Redis server locally, start Redis (for
+example, `redis-server` in another terminal), then run from `backend/`:
+
+```bash
+LEGAL_QA_REDIS_INTEGRATION=1 REDIS_URL=redis://localhost:6379/0 \
+  python -m pytest -q tests/integration/test_legal_question_cache_redis.py
+```
+
+This opt-in integration test exercises Redis serialization, read/write, and
+expiry configuration for the cache component. It does not test a live LLM or
+claim that a verified Ethiopian legal corpus is indexed.
 
 Run its focused tests with:
 

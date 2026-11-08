@@ -17,6 +17,10 @@ services:
           name: legalcheck-redis
           type: redis
           property: connectionString
+      - key: LEGAL_QA_CACHE_VERSION
+        value: v1
+      - key: LEGAL_QA_CACHE_TTL_SECONDS
+        value: "3600"
       - key: CORS_ORIGINS
         sync: false
       - key: SECRET_KEY

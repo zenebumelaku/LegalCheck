@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     llm_model_name: str = Field(default="not-configured", min_length=1, max_length=255)
     llm_model_version: str = Field(default="v1", min_length=1, max_length=100)
     llm_timeout_seconds: int = Field(default=90, gt=0, le=300)
+    legal_qa_cache_version: str = Field(default="v1", min_length=1, max_length=100)
+    legal_qa_cache_ttl_seconds: int = Field(default=3600, ge=0, le=2_592_000)
     audit_job_timeout_seconds: int = Field(default=1800, gt=0, le=7200)
     audit_stale_after_seconds: int = Field(default=2100, gt=0, le=14400)
     rate_limit_login_per_minute: int = Field(default=10, gt=0, le=1000)

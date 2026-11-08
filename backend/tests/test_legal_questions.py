@@ -5,12 +5,43 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.orm import Session
 
-from app.db.models import LegalProvision, LegalSource
+from app.core.config import Settings
+from app.db.models import LegalProvision, LegalProvisionChunk, LegalSource
 from app.db.session import get_db
 from app.main import app
+from app.schemas.legal_questions import LegalQuestionAnswer
+from app.services.legal_question_cache import legal_question_cache_key
 from app.services.llm_provider import LLMProviderError
+import app.services.legal_question_answering as legal_question_answering
+
+
+class MemoryAnswerCache:
+    def __init__(self) -> None:
+        self.entries: dict[str, LegalQuestionAnswer] = {}
+        self.get_calls: list[str] = []
+        self.set_calls: list[str] = []
+        self.fail_get = False
+        self.fail_set = False
+
+    def get(self, key: str) -> Optional[LegalQuestionAnswer]:
+        self.get_calls.append(key)
+        if self.fail_get:
+            raise RedisConnectionError("synthetic Redis outage")
+        return self.entries.get(key)
+
+    def set(
+        self,
+        key: str,
+        answer: LegalQuestionAnswer,
+        ttl_seconds: int,
+    ) -> None:
+        self.set_calls.append(key)
+        if self.fail_set:
+            raise RedisConnectionError("synthetic Redis outage")
+        self.entries[key] = answer
 
 
 class MockQuestionProvider:
@@ -27,13 +58,24 @@ class MockQuestionProvider:
 
 
 @pytest.fixture
+def answer_cache() -> MemoryAnswerCache:
+    return MemoryAnswerCache()
+
+
+@pytest.fixture
 def legal_question_client(
     db_session: Session,
+    answer_cache: MemoryAnswerCache,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[TestClient, None, None]:
     def override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_legal_question_cache",
+        lambda: answer_cache,
+    )
     try:
         with TestClient(app) as test_client:
             yield test_client
@@ -151,6 +193,7 @@ def _ask(
 )
 def test_no_eligible_evidence_returns_insufficient_without_provider(
     legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     verified: bool,
@@ -180,10 +223,12 @@ def test_no_eligible_evidence_returns_insufficient_without_provider(
     assert payload["status"] == "insufficient_evidence"
     assert payload["citations"] == []
     assert payload["model_name"] is None
+    assert answer_cache.set_calls == []
 
 
 def test_eligible_retrieved_evidence_is_answered_and_cited(
     legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -206,7 +251,170 @@ def test_eligible_retrieved_evidence_is_answered_and_cited(
     assert payload["citations"][0]["sub_article_reference"] == provision.sub_article_reference
     assert payload["citations"][0]["page_number"] == 9
     assert "not legal advice" in payload["disclaimer"]
+    assert payload["cache_hit"] is False
     assert provider.calls[0][1][0]["provision_id"] == str(provision.id)
+    assert answer_cache.set_calls
+
+
+def test_second_normalized_question_hits_cache_before_retrieval_or_generation(
+    legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=user_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+    original_retrieval = legal_question_answering.retrieve_legal_evidence
+    retrieval_calls = 0
+
+    def counted_retrieval(*args, **kwargs):
+        nonlocal retrieval_calls
+        retrieval_calls += 1
+        return original_retrieval(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.retrieve_legal_evidence",
+        counted_retrieval,
+    )
+    first = _ask(legal_question_client, token)
+    second = _ask(
+        legal_question_client,
+        token,
+        question="  What does the synthetic fixture say about wages? \n",
+    )
+
+    assert first.status_code == second.status_code == 200
+    first_payload, second_payload = first.json(), second.json()
+    assert first_payload["cache_hit"] is False
+    assert second_payload["cache_hit"] is True
+    assert second_payload["answer"] == first_payload["answer"]
+    assert second_payload["citations"] == first_payload["citations"]
+    assert retrieval_calls == 1
+    assert len(provider.calls) == 1
+    assert len(answer_cache.get_calls) == 2
+    assert answer_cache.get_calls[0] == answer_cache.get_calls[1]
+
+
+@pytest.mark.parametrize("change_kind", ["source_change", "reindex"])
+def test_knowledge_base_changes_invalidate_previous_answer(
+    legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    change_kind: str,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=user_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+    first = _ask(legal_question_client, token)
+    assert first.status_code == 200 and first.json()["cache_hit"] is False
+
+    if change_kind == "source_change":
+        provision.legal_source.title = "Updated synthetic fixture source"
+    else:
+        db_session.add(
+            LegalProvisionChunk(
+                provision_id=provision.id,
+                chunk_index=0,
+                chunk_text=provision.text,
+                content_checksum="b" * 64,
+                page_number=provision.page_number,
+                source_version_label=provision.legal_source.version_label,
+                embedding_model="synthetic-reindex-model",
+                embedding_version="synthetic-v1",
+            )
+        )
+    db_session.commit()
+    second = _ask(legal_question_client, token)
+
+    assert second.status_code == 200
+    assert second.json()["cache_hit"] is False
+    assert len(provider.calls) == 2
+    assert answer_cache.get_calls[0] != answer_cache.get_calls[1]
+
+
+def test_cache_key_includes_explicit_cache_version_and_normalizes_question() -> None:
+    settings_v1 = Settings(legal_qa_cache_version="v1")
+    settings_v2 = Settings(legal_qa_cache_version="v2")
+    common = {
+        "context": {"jurisdiction": "ET", "review_date": "2024-01-01"},
+        "knowledge_base_version": "synthetic-kb-v1",
+    }
+
+    first_key = legal_question_cache_key(
+        question="What   is the rule?",
+        settings=settings_v1,
+        **common,
+    )
+    normalized_key = legal_question_cache_key(
+        question=" What is the rule? ",
+        settings=settings_v1,
+        **common,
+    )
+    next_version_key = legal_question_cache_key(
+        question="What is the rule?",
+        settings=settings_v2,
+        **common,
+    )
+
+    assert first_key == normalized_key
+    assert first_key != next_version_key
+
+
+def test_redis_failure_fails_open_without_cache_hit_or_write(
+    legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=user_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    answer_cache.fail_get = True
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+
+    response = _ask(legal_question_client, token)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "answered"
+    assert response.json()["cache_hit"] is False
+    assert len(provider.calls) == 1
+    assert answer_cache.set_calls == []
+
+
+def test_redis_write_failure_still_returns_validated_answer(
+    legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=user_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    answer_cache.fail_set = True
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+
+    response = _ask(legal_question_client, token)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "answered"
+    assert response.json()["cache_hit"] is False
+    assert len(provider.calls) == 1
 
 
 def test_ineligible_results_do_not_crowd_out_eligible_evidence(

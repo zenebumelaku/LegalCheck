@@ -5,9 +5,11 @@ from typing import Optional, Protocol
 from uuid import UUID
 
 from pydantic import ValidationError
+from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.db.models import LegalProvision, LegalSource
 from app.schemas.compliance_analysis import CitationReference
 from app.schemas.legal_questions import (
@@ -17,6 +19,13 @@ from app.schemas.legal_questions import (
 )
 from app.schemas.legal_retrieval import LegalEvidenceResult, LegalReviewContext
 from app.services.embeddings import EmbeddingProvider
+from app.services.legal_question_cache import (
+    LegalQuestionCache,
+    get_legal_question_cache,
+    legal_knowledge_base_version,
+    legal_question_cache_key,
+    normalize_legal_question,
+)
 from app.services.legal_retrieval import retrieve_legal_evidence
 from app.services.llm_provider import LLMProviderError, get_llm_provider
 
@@ -143,16 +152,50 @@ def answer_legal_question(
     db: Session,
     llm_provider: Optional[LegalQuestionLLMProvider] = None,
     embedding_provider: Optional[EmbeddingProvider] = None,
+    answer_cache: Optional[LegalQuestionCache] = None,
+    settings: Optional[Settings] = None,
     top_k: int = 5,
 ) -> LegalQuestionAnswer:
+    current_settings = settings or get_settings()
+    normalized_question = normalize_legal_question(question)
+    if not normalized_question:
+        raise ValueError("question must not be blank.")
     review_date = (review_context.review_date if review_context else None) or date.today()
     context = (review_context or LegalReviewContext()).model_copy(
         update={"review_date": review_date, "include_unverified": False}
     )
     if not 1 <= top_k <= 100:
         raise ValueError("top_k must be between 1 and 100.")
+
+    cache_available = False
+    cache = answer_cache
+    cache_key: Optional[str] = None
+    if current_settings.legal_qa_cache_ttl_seconds > 0:
+        try:
+            cache = cache or get_legal_question_cache()
+            cache_key = legal_question_cache_key(
+                question=normalized_question,
+                context={
+                    "review_context": context.model_dump(mode="json"),
+                    "top_k": top_k,
+                },
+                knowledge_base_version=legal_knowledge_base_version(db),
+                settings=current_settings,
+            )
+            cached_answer = cache.get(cache_key)
+            cache_available = True
+            if cached_answer is not None:
+                return cached_answer.model_copy(
+                    update={"question": normalized_question, "cache_hit": True}
+                )
+        except RedisError as exc:
+            logger.warning(
+                "Legal-question answer cache is unavailable; continuing without cache",
+                extra={"error_type": type(exc).__name__},
+            )
+
     retrieval = retrieve_legal_evidence(
-        question,
+        normalized_question,
         context,
         100,
         db=db,
@@ -167,7 +210,7 @@ def answer_legal_question(
     if not eligible_results:
         return LegalQuestionAnswer(
             status="insufficient_evidence",
-            question=question,
+            question=normalized_question,
             answer=_INSUFFICIENT_ANSWER,
             review_date=review_date,
             citations=[],
@@ -184,7 +227,7 @@ def answer_legal_question(
 
     try:
         raw_response = provider.answer_legal_question(
-            question,
+            normalized_question,
             [_evidence_payload(result) for result in eligible_results],
         )
         parsed = LegalQuestionLLMResponse.model_validate(json.loads(raw_response))
@@ -200,7 +243,7 @@ def answer_legal_question(
     if parsed.evidence_assessment != "supporting" or not parsed.citations:
         return LegalQuestionAnswer(
             status="insufficient_evidence",
-            question=question,
+            question=normalized_question,
             answer=_INVALID_SUPPORT_ANSWER,
             review_date=review_date,
             citations=[],
@@ -222,7 +265,7 @@ def answer_legal_question(
         )
         return LegalQuestionAnswer(
             status="insufficient_evidence",
-            question=question,
+            question=normalized_question,
             answer=_INVALID_SUPPORT_ANSWER,
             review_date=review_date,
             citations=[],
@@ -230,12 +273,25 @@ def answer_legal_question(
             model_version=provider.model_version,
         )
 
-    return LegalQuestionAnswer(
+    answer = LegalQuestionAnswer(
         status="answered",
-        question=question,
+        question=normalized_question,
         answer=parsed.answer,
         review_date=review_date,
         citations=citations,
         model_name=provider.model_name,
         model_version=provider.model_version,
     )
+    if cache_available and cache is not None and cache_key is not None:
+        try:
+            cache.set(
+                cache_key,
+                answer,
+                current_settings.legal_qa_cache_ttl_seconds,
+            )
+        except RedisError as exc:
+            logger.warning(
+                "Legal-question answer could not be cached",
+                extra={"error_type": type(exc).__name__},
+            )
+    return answer
