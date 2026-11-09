@@ -61,18 +61,29 @@ export interface AuditFinding {
   contractExcerpt: string;
   contractLocation?: string;
   issueExplanation: string;
-  legalProvision: {
-    proclamationTitle: string;
-    proclamationNumber: string;
+  legalProvision?: {
+    proclamationTitle?: string;
+    proclamationNumber?: string;
     articleNumber: string;
     subArticle?: string;
     provisionText: string;
     sourceId: string;
     sourceUrl?: string;
-    effectiveDate: string;
+    effectiveDate?: string;
   };
+  evidenceAssessment?: 'supporting' | 'contradictory' | 'insufficient';
+  citations?: {
+    sourceId: string;
+    sourceTitle: string;
+    sourceUrl?: string;
+    versionLabel?: string;
+    articleNumber: string;
+    subArticle?: string;
+    supportingQuote?: string;
+    relevanceInformation?: string;
+  }[];
   suggestedAction: string;
-  confidenceScore: number; // 0 to 1 confidence of provision match
+  confidenceScore?: number;
   userReported?: boolean;
   userReportNote?: string;
 }
@@ -105,6 +116,9 @@ export interface AuditDocument {
   infoCount: number;
   findings?: AuditFinding[];
   rawTextPreview?: string;
+  isDemoOnly?: boolean;
+  processingWarnings?: string[];
+  limitations?: string[];
 }
 
 export interface User {

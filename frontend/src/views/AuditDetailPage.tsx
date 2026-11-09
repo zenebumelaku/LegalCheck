@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Download,
   Share2,
-  AlertTriangle,
   Scale,
   Calendar,
   FileText,
@@ -11,16 +10,13 @@ import {
   Filter,
   RefreshCw,
   Trash2,
-  CheckCircle2,
-  ShieldCheck,
-  ChevronDown
+  AlertTriangle
 } from 'lucide-react';
 import { AuditDocument, AuditFinding, FindingSeverity, FindingType } from '../types';
 import { AuditService } from '../services/audit.service';
 import { formatDate, formatDateTime, formatBytes, generateAuditPdf } from '../lib/utils';
 import { AuditStatusBadge, SeverityBadge, FindingTypeBadge } from '../components/ui/AuditBadges';
 import { FindingCard } from '../components/audits/FindingCard';
-import { LegalSourceModal } from '../components/ui/LegalSourceModal';
 import { ReportFindingDialog, ConfirmDialog, LoadingSkeleton, EmptyState } from '../components/ui/FeedbackModals';
 
 interface AuditDetailPageProps {
@@ -39,7 +35,6 @@ export function AuditDetailPage({ auditId, onNavigate }: AuditDetailPageProps) {
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
 
   // Modals state
-  const [selectedProvision, setSelectedProvision] = useState<AuditFinding['legalProvision'] | null>(null);
   const [reportingFinding, setReportingFinding] = useState<AuditFinding | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -197,7 +192,7 @@ export function AuditDetailPage({ auditId, onNavigate }: AuditDetailPageProps) {
               </div>
               <div className="flex items-center gap-1.5">
                 <Scale className="w-4 h-4 text-emerald-600" />
-                <span className="text-slate-700 font-medium">Labour Proclamation No. 1156/2019</span>
+                <span className="text-slate-700 font-medium">AI-assisted evidence review</span>
               </div>
             </div>
           </div>
@@ -230,12 +225,15 @@ export function AuditDetailPage({ auditId, onNavigate }: AuditDetailPageProps) {
             </div>
           </div>
         </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Severity is a review priority, not a determination of legal liability.
+        </p>
 
         {/* Overall Legal Assessment Box */}
         {audit.overallSummary && (
           <div className="mt-6 p-4 rounded-lg bg-slate-50 border border-slate-200">
             <div className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-1">
-              Overall Legal Compliance Finding Summary
+              Review summary — not a legal determination
             </div>
             <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
               {audit.overallSummary}
@@ -243,6 +241,30 @@ export function AuditDetailPage({ auditId, onNavigate }: AuditDetailPageProps) {
           </div>
         )}
       </div>
+
+      {audit.isDemoOnly && (
+        <div className="flex items-start gap-3 rounded-xl border-2 border-amber-400 bg-amber-50 p-4 text-sm leading-6 text-amber-950" role="alert">
+          <AlertTriangle aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0" />
+          <p>
+            <strong>DEMO ONLY — unverified client-side keyword rules.</strong>{' '}
+            These synthetic examples are not backend legal analysis, are not
+            based on validated retrieved evidence, and must not be used to
+            determine legal rights or obligations.
+          </p>
+        </div>
+      )}
+
+      {!audit.isDemoOnly &&
+        [...(audit.processingWarnings ?? []), ...(audit.limitations ?? [])].length > 0 && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+            <h2 className="font-semibold">Review limitations and processing warnings</h2>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5">
+              {[...(audit.processingWarnings ?? []), ...(audit.limitations ?? [])].map(
+                (item, index) => <li key={`${index}-${item}`}>{item}</li>
+              )}
+            </ul>
+          </div>
+        )}
 
       {/* Filter and Control Bar */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-3">
@@ -276,6 +298,7 @@ export function AuditDetailPage({ auditId, onNavigate }: AuditDetailPageProps) {
             <option value="MISSING_OR_INCOMPLETE_CLAUSE">Missing/Incomplete Clause</option>
             <option value="OUTDATED_OR_UNVERIFIED_REFERENCE">Outdated Reference</option>
             <option value="INFORMATIONAL_OBSERVATION">Informational</option>
+            <option value="INSUFFICIENT_EVIDENCE">Insufficient Evidence</option>
           </select>
         </div>
 
@@ -292,15 +315,19 @@ export function AuditDetailPage({ auditId, onNavigate }: AuditDetailPageProps) {
               key={finding.id}
               finding={finding}
               index={idx}
-              onViewSource={prov => setSelectedProvision(prov)}
+              demoOnly={audit.isDemoOnly}
               onReportFinding={fnd => setReportingFinding(fnd)}
             />
           ))}
         </div>
       ) : (
         <EmptyState
-          title="No Matching Findings"
-          description="No compliance findings match your active filters. Try selecting 'All Severities' or reset filter criteria."
+          title={findings.length === 0 ? 'No Findings Returned' : 'No Matching Findings'}
+          description={
+            findings.length === 0
+              ? 'No findings were returned for this review. This does not establish that the contract complies with applicable law.'
+              : 'No findings match your active filters. Try selecting all severities or reset the filters.'
+          }
           actionLabel="Reset Filters"
           onAction={() => {
             setSeverityFilter('ALL');
@@ -309,14 +336,6 @@ export function AuditDetailPage({ auditId, onNavigate }: AuditDetailPageProps) {
           }}
         />
       )}
-
-      {/* Legal Source Proclamation Modal */}
-      <LegalSourceModal
-        isOpen={!!selectedProvision}
-        provision={selectedProvision}
-        onClose={() => setSelectedProvision(null)}
-        onNavigateToFullSource={sourceId => onNavigate(`/legal-sources/${sourceId}`)}
-      />
 
       {/* Report Finding Dialog */}
       <ReportFindingDialog

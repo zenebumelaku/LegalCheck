@@ -49,6 +49,23 @@ app.add_middleware(
     ),
 )
 
+_PRIVATE_API_PREFIXES = tuple(
+    f"{settings.api_v1_prefix}/{resource}"
+    for resource in ("audits", "documents", "findings", "legal-questions")
+)
+
+
+@app.middleware("http")
+async def disable_private_api_caching(request: Request, call_next):
+    response = await call_next(request)
+    if any(
+        request.url.path == prefix or request.url.path.startswith(f"{prefix}/")
+        for prefix in _PRIVATE_API_PREFIXES
+    ):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(

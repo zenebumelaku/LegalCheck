@@ -121,8 +121,17 @@ export function FileUploadDropzone({
 
   return (
     <div className="space-y-6">
+      {/* User documents are never sent through the client-side demo analyzer. */}
+      {demoFallbackEnabled && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950" role="note">
+          <strong>Demo mode only:</strong> use the synthetic samples below. Do
+          not upload a real or confidential contract while demo mode is enabled.
+          Disable demo mode to submit documents to the authenticated backend.
+        </div>
+      )}
+
       {/* Upload Box or Selected File Card */}
-      {!selectedFile ? (
+      {!demoFallbackEnabled && !selectedFile ? (
         <div
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -137,7 +146,7 @@ export function FileUploadDropzone({
           <input
             ref={fileInputRef}
             type="file"
-            accept={demoFallbackEnabled ? '.pdf,.docx,.txt' : '.pdf,.docx'}
+            accept=".pdf,.docx"
             onChange={handleFileChange}
             className="hidden"
           />
@@ -150,10 +159,13 @@ export function FileUploadDropzone({
             Click to upload or drag & drop your employment agreement
           </h3>
           <p className="mt-1 text-xs text-slate-500 max-w-sm mx-auto">
-            Supported formats: PDF and DOCX (Max 10 MB){demoFallbackEnabled ? ', or TXT in demo mode' : ''}. Your file is processed securely for Labour Proclamation No. 1156/2019 compliance.
+            Supported formats: PDF and DOCX (Max 10 MB). The authenticated
+            backend extracts available text and reviews it against eligible
+            legal-source records. OCR is not available; scanned image-only PDFs
+            may not yield usable text.
           </p>
         </div>
-      ) : (
+      ) : selectedFile && (!demoFallbackEnabled || selectedFile.isSample) ? (
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex items-center justify-between gap-4">
           <div className="flex items-center gap-3.5 min-w-0">
             <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center shrink-0">
@@ -170,7 +182,7 @@ export function FileUploadDropzone({
                 {selectedFile.isSample && (
                   <>
                     <span>·</span>
-                    <span className="text-emerald-700 font-medium">Sample Template Loaded</span>
+                    <span className="font-semibold text-amber-800">SYNTHETIC DEMO SAMPLE</span>
                   </>
                 )}
               </div>
@@ -188,7 +200,7 @@ export function FileUploadDropzone({
             </button>
           </div>
         </div>
-      )}
+      ) : null}
 
       {errorMessage && (
         <div className="p-3 bg-rose-50 text-rose-800 border border-rose-200 rounded-lg text-xs flex items-center gap-2">
@@ -197,12 +209,12 @@ export function FileUploadDropzone({
         </div>
       )}
 
-      {/* Verified Sample Contracts for Instant Testing */}
+      {/* Synthetic samples for opt-in demo mode */}
       {demoFallbackEnabled && (
         <div className="pt-2">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 mb-3">
+          <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-amber-900">
             <Sparkles className="w-4 h-4 text-emerald-600" />
-            <span>Or Choose a Verified Ethiopian Business Employment Contract Template</span>
+            <span>Synthetic demo contracts — not verified legal materials</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -227,7 +239,7 @@ export function FileUploadDropzone({
                 </p>
                 <div className="text-[10px] text-emerald-700 font-semibold flex items-center gap-1">
                   <BookOpen className="w-3 h-3" />
-                  <span>Load This Contract</span>
+                  <span>Use Synthetic Demo</span>
                 </div>
               </div>
             ))}

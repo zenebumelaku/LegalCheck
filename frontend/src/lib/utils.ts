@@ -130,7 +130,13 @@ export function generateAuditPdf(audit: AuditDocument): void {
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(203, 213, 225);
-  doc.text('Legal Compliance Audit Report · Labour Proclamation No. 1156/2019', 14, 21);
+  doc.text(
+    audit.isDemoOnly
+      ? 'DEMO ONLY · Unverified client-side keyword rules'
+      : 'AI-assisted contract review · Preliminary findings, not legal determinations',
+    14,
+    21
+  );
 
   y = 38;
 
@@ -155,7 +161,7 @@ export function generateAuditPdf(audit: AuditDocument): void {
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(30, 41, 59);
-  doc.text('AUDIT FINDINGS SUMMARY', 18, y + 7);
+  doc.text('AUDIT REVIEW SUMMARY', 18, y + 7);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
@@ -168,7 +174,7 @@ export function generateAuditPdf(audit: AuditDocument): void {
   // Stats Grid
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
-  doc.text(`Total Issues Identified: ${audit.totalFindings} (Critical: ${audit.criticalCount}, High: ${audit.highCount}, Medium: ${audit.mediumCount}, Low: ${audit.lowCount})`, 14, y);
+  doc.text(`Findings returned: ${audit.totalFindings} (high priority: ${audit.criticalCount + audit.highCount}, medium: ${audit.mediumCount}, low: ${audit.lowCount})`, 14, y);
   y += 8;
 
   // Findings List
@@ -202,7 +208,12 @@ export function generateAuditPdf(audit: AuditDocument): void {
       doc.setFontSize(7.5);
       doc.setTextColor(51, 65, 85);
 
-      const lawText = `Citation: ${f.legalProvision.articleNumber}, ${f.legalProvision.proclamationTitle}`;
+      const citation = f.citations?.[0];
+      const lawText = citation
+        ? `Retrieved citation: ${citation.sourceTitle}, Article ${citation.articleNumber}${citation.subArticle ? ` (${citation.subArticle})` : ''}`
+        : f.legalProvision
+          ? `DEMO ONLY — unverified rule reference: ${f.legalProvision.articleNumber}`
+          : 'No validated legal citation is available for this finding.';
       doc.text(lawText, 18, y + 17);
 
       const recText = `Action: ${f.suggestedAction}`;
@@ -218,7 +229,13 @@ export function generateAuditPdf(audit: AuditDocument): void {
   doc.setFontSize(7);
   doc.setFont('helvetica', 'italic');
   doc.setTextColor(148, 163, 184);
-  doc.text('Disclaimer: LegalCheck Ethiopia provides automated legal analysis based on Labour Proclamation No. 1156/2019. It does not constitute formal legal counsel.', 14, footerY);
+  doc.text(
+    audit.isDemoOnly
+      ? 'DEMO ONLY: Synthetic client-side output is unverified and is not legal analysis or advice.'
+      : 'Preliminary AI-assisted review only; not a legal opinion. Findings may be incomplete and require review by qualified counsel.',
+    14,
+    footerY
+  );
 
   doc.save(`LegalCheck_Ethiopia_${audit.documentName.replace(/[^a-zA-Z0-9]/g, '_')}_Audit.pdf`);
 }

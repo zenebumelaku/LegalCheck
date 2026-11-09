@@ -13,6 +13,28 @@ interface BackendDocument {
   document_type: string | null;
 }
 
+interface BackendFinding {
+  id?: string;
+  category?: string;
+  severity?: string;
+  clause_id?: string;
+  clause_text?: string;
+  explanation?: string;
+  recommended_action?: string | null;
+  evidence_assessment?: AuditFinding['evidenceAssessment'];
+  model_confidence?: number | null;
+  citations?: {
+    source_id: string;
+    source_title: string;
+    source_url?: string | null;
+    version_label?: string | null;
+    article_number: string;
+    sub_article_reference?: string | null;
+    supporting_quote?: string | null;
+    relevance_information?: string | null;
+  }[];
+}
+
 const INITIAL_SEED_AUDITS: AuditDocument[] = (() => {
   const seed1Id = 'aud-eth-2026-001';
   const contract1 = SAMPLE_ETHIOPIAN_CONTRACTS[0];
@@ -51,6 +73,7 @@ const INITIAL_SEED_AUDITS: AuditDocument[] = (() => {
       },
       description: 'Standard technical lead contract for Addis Tech Solutions PLC engineering department.',
       overallSummary: audit1Res.summary,
+      isDemoOnly: true,
       totalFindings: audit1Res.findings.length,
       criticalCount: audit1Res.findings.filter(f => f.severity === 'CRITICAL').length,
       highCount: audit1Res.findings.filter(f => f.severity === 'HIGH').length,
@@ -80,6 +103,7 @@ const INITIAL_SEED_AUDITS: AuditDocument[] = (() => {
       },
       description: 'Commercial sales staff employment agreement based on Proclamation 1156/2019 standards.',
       overallSummary: audit2Res.summary,
+      isDemoOnly: true,
       totalFindings: audit2Res.findings.length,
       criticalCount: audit2Res.findings.filter(f => f.severity === 'CRITICAL').length,
       highCount: audit2Res.findings.filter(f => f.severity === 'HIGH').length,
@@ -174,6 +198,17 @@ function normalizeFindingCategory(value: string): AuditFinding['category'] {
   }
 }
 
+export function assertDemoInputIsSynthetic(
+  demoEnabled: boolean,
+  isSample: boolean
+): void {
+  if (demoEnabled && !isSample) {
+    throw new Error(
+      'Demo mode accepts only synthetic sample contracts. Disable demo mode to upload a private contract to the authenticated backend.'
+    );
+  }
+}
+
 export class AuditService {
   private static getStoredAudits(): AuditDocument[] {
     if (typeof window === 'undefined') return INITIAL_SEED_AUDITS;
@@ -183,7 +218,16 @@ export class AuditService {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_SEED_AUDITS));
         return INITIAL_SEED_AUDITS;
       }
-      return JSON.parse(data);
+      const savedAudits = JSON.parse(data) as AuditDocument[];
+      const demoAudits = savedAudits.filter(audit => audit.isDemoOnly === true);
+      if (demoAudits.length === 0) {
+        this.saveAudits(INITIAL_SEED_AUDITS);
+        return INITIAL_SEED_AUDITS;
+      }
+      if (demoAudits.length !== savedAudits.length) {
+        this.saveAudits(demoAudits);
+      }
+      return demoAudits;
     } catch {
       return INITIAL_SEED_AUDITS;
     }
@@ -199,32 +243,45 @@ export class AuditService {
     }
   }
 
-  private static mapBackendFinding(finding: any, index: number): AuditFinding {
-    const citation = finding.citations?.[0];
+  static mapBackendFinding(
+    finding: BackendFinding,
+    index: number,
+    auditId = 'backend-audit'
+  ): AuditFinding {
+    const citations = (finding.citations ?? []).map(citation => ({
+      sourceId: citation.source_id,
+      sourceTitle: citation.source_title,
+      sourceUrl: citation.source_url ?? undefined,
+      versionLabel: citation.version_label ?? undefined,
+      articleNumber: citation.article_number,
+      subArticle: citation.sub_article_reference ?? undefined,
+      supportingQuote: citation.supporting_quote ?? undefined,
+      relevanceInformation: citation.relevance_information ?? undefined
+    }));
+    const evidenceAssessment =
+      finding.evidence_assessment === 'supporting' && citations.length > 0
+        ? 'supporting'
+        : 'insufficient';
     const userFacingCategory = normalizeFindingCategory(finding.category ?? finding.clause_id ?? 'general_contract_terms');
 
     return {
       id: String(finding.id ?? `${index}`),
-      auditId: String(finding.audit_id ?? 'unknown'),
-      title: (finding.clause_id ?? `Finding ${index + 1}`).replace(/_/g, ' '),
-      severity: normalizeSeverity(finding.severity ?? 'informational'),
-      type: normalizeFindingType(finding.category ?? 'potential_legal_conflict'),
+      auditId,
+      title: evidenceAssessment === 'supporting'
+        ? (finding.clause_id ?? `Finding ${index + 1}`).replace(/_/g, ' ')
+        : 'Insufficient evidence for a legal conclusion',
+      severity: evidenceAssessment === 'supporting'
+        ? normalizeSeverity(finding.severity ?? 'informational')
+        : 'INFORMATIONAL',
+      type: evidenceAssessment === 'supporting'
+        ? normalizeFindingType(finding.category ?? 'potential_legal_conflict')
+        : 'INSUFFICIENT_EVIDENCE',
       category: userFacingCategory,
-      contractExcerpt: finding.clause_text ?? citation?.supporting_quote ?? 'No contract excerpt was provided.',
-      contractLocation: citation?.article_number ? `Article ${citation.article_number}` : undefined,
+      contractExcerpt: finding.clause_text ?? 'No contract excerpt was provided.',
       issueExplanation: finding.explanation ?? 'No explanation was provided by the audit engine.',
-      legalProvision: {
-        proclamationTitle: 'Federal Negarit Gazeta',
-        proclamationNumber: citation?.source_id ? 'No. 1156/2019' : 'No. 1156/2019',
-        articleNumber: citation?.article_number ?? 'N/A',
-        subArticle: citation?.sub_article_reference ?? undefined,
-        provisionText: citation?.supporting_quote ?? finding.clause_text ?? 'Legal provision text is unavailable.',
-        sourceId: String(citation?.source_id ?? finding.id ?? 'unknown'),
-        sourceUrl: citation?.source_url ?? '',
-        effectiveDate: '2019-01-01'
-      },
+      evidenceAssessment,
+      citations,
       suggestedAction: finding.recommended_action ?? 'Have a qualified Ethiopian legal professional review this issue.',
-      confidenceScore: Number(finding.model_confidence ?? 0.75),
       userReported: false,
       userReportNote: undefined
     };
@@ -240,6 +297,7 @@ export class AuditService {
 
     return {
       id: String(item.id),
+      isDemoOnly: false,
       userId: String(item.requested_by ?? 'unknown-user'),
       documentName: item.document_id ? `Document ${String(item.document_id).slice(0, 8)}` : 'Audit document',
       documentType: 'EMPLOYMENT_CONTRACT',
@@ -261,7 +319,8 @@ export class AuditService {
       lowCount: 0,
       infoCount: 0,
       findings: [],
-      rawTextPreview: ''
+      rawTextPreview: '',
+      processingWarnings: item.processing_warnings ?? []
     };
   }
 
@@ -365,18 +424,24 @@ export class AuditService {
     const mapped = this.applyBackendDocument(this.mapBackendAudit(audit), document);
 
     if (audit.audit_status === 'completed' || audit.status === 'COMPLETED') {
-      const findingsResponse = await apiRequest<{ findings: any[] }>('/api/v1/audits/' + id + '/findings');
-      const findings = (findingsResponse.findings || []).map((finding, index) => this.mapBackendFinding(finding, index));
+      const findingsResponse = await apiRequest<{
+        findings: BackendFinding[];
+        limitations?: { items: string[] };
+      }>('/api/v1/audits/' + id + '/findings');
+      const findings = (findingsResponse.findings || []).map(
+        (finding, index) => this.mapBackendFinding(finding, index, id)
+      );
       mapped.findings = findings;
       mapped.totalFindings = findings.length;
-      mapped.criticalCount = findings.filter(f => f.severity === 'CRITICAL').length;
+      mapped.criticalCount = findings.filter(f => f.severity === 'CRITICAL' && f.evidenceAssessment === 'supporting').length;
       mapped.highCount = findings.filter(f => f.severity === 'HIGH').length;
       mapped.mediumCount = findings.filter(f => f.severity === 'MEDIUM').length;
       mapped.lowCount = findings.filter(f => f.severity === 'LOW').length;
       mapped.infoCount = findings.filter(f => f.severity === 'INFORMATIONAL').length;
-      mapped.overallSummary = findings.length
-        ? `Reviewed ${findings.length} issue${findings.length === 1 ? '' : 's'} against the current legal framework.`
-        : 'No issues were identified for this audit.';
+      mapped.overallSummary = findings.some(f => f.evidenceAssessment === 'supporting')
+        ? `The review returned ${findings.length} finding${findings.length === 1 ? '' : 's'} for human review. They are not determinations of legal liability.`
+        : 'No supported findings were returned. This does not establish that the contract complies with applicable law.';
+      mapped.limitations = findingsResponse.limitations?.items ?? [];
     }
 
     return mapped;
@@ -392,7 +457,9 @@ export class AuditService {
     description?: string;
     rawText: string;
     file?: File;
+    isSample?: boolean;
   }): Promise<AuditDocument> {
+    assertDemoInputIsSynthetic(isDemoFallbackEnabled(), Boolean(payload.isSample));
     if (isDemoFallbackEnabled()) {
       const auditId = `aud-eth-${Date.now().toString().slice(-6)}`;
       const analysis = auditContractText(auditId, payload.rawText, payload.reviewOptions);
@@ -414,6 +481,7 @@ export class AuditService {
         updatedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
         status: 'COMPLETED',
+        isDemoOnly: true,
         progressPercent: 100,
         reviewOptions: payload.reviewOptions,
         description: payload.description,

@@ -6,7 +6,6 @@ import {
   FileText,
   Trash2,
   ExternalLink,
-  ShieldCheck,
   Calendar,
   AlertCircle,
   FileCheck,
@@ -79,7 +78,7 @@ export function AuditHistoryPage({ onNavigate }: AuditHistoryPageProps) {
             Compliance Audit History
           </h1>
           <p className="mt-1 text-xs sm:text-sm text-slate-500">
-            All evaluated employment agreements and compliance reports across your organization.
+            Audit records for documents you own or can access through your organization.
           </p>
         </div>
 
@@ -162,7 +161,7 @@ export function AuditHistoryPage({ onNavigate }: AuditHistoryPageProps) {
                 <tr>
                   <th className="py-3 px-4">Document Details</th>
                   <th className="py-3 px-4">Audit Status</th>
-                  <th className="py-3 px-4">Compliance Issues</th>
+                  <th className="py-3 px-4">Review Findings</th>
                   <th className="py-3 px-4">Created Date</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -184,6 +183,9 @@ export function AuditHistoryPage({ onNavigate }: AuditHistoryPageProps) {
                             {item.documentName}
                           </div>
                           <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                            {item.isDemoOnly && (
+                              <span className="font-bold text-amber-800">DEMO ONLY</span>
+                            )}
                             <span>{item.fileFormat}</span>
                             <span>·</span>
                             <span>{formatBytes(item.fileSize)}</span>
@@ -198,14 +200,17 @@ export function AuditHistoryPage({ onNavigate }: AuditHistoryPageProps) {
 
                     <td className="py-3.5 px-4 whitespace-nowrap">
                       <div className="flex items-center gap-2 font-mono">
-                        {item.criticalCount > 0 ? (
+                        {item.isDemoOnly ? (
+                          <span className="text-amber-800 font-semibold">
+                            DEMO ONLY
+                          </span>
+                        ) : item.criticalCount > 0 ? (
                           <span className="text-rose-700 font-semibold">
-                            {item.criticalCount} Critical
+                            {item.criticalCount} Critical-priority
                           </span>
                         ) : (
-                          <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                            <ShieldCheck className="w-3.5 h-3.5" />
-                            <span>0 Critical</span>
+                          <span className="text-slate-600 font-semibold">
+                            No critical-priority findings
                           </span>
                         )}
                         <span className="text-slate-300">·</span>

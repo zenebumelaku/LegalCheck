@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ArrowLeft, ArrowRight, CheckCircle2, ShieldAlert, FileText, Check, Loader2, Info } from 'lucide-react';
 import { FileUploadDropzone } from '../components/audits/FileUploadDropzone';
 import { AuditService } from '../services/audit.service';
+import { isDemoFallbackEnabled } from '../lib/api-client';
 import { AuditDocument } from '../types';
 
 interface NewAuditPageProps {
@@ -9,6 +10,7 @@ interface NewAuditPageProps {
 }
 
 export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
+  const demoFallbackEnabled = isDemoFallbackEnabled();
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
 
   // Step 1: File
@@ -40,6 +42,7 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
 
   const handleNextFromStep1 = () => {
     if (!fileData) return;
+    if (demoFallbackEnabled && !fileData.isSample) return;
     setCurrentStep(2);
   };
 
@@ -67,7 +70,8 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
         reviewOptions,
         description: description.trim() || undefined,
         rawText: fileData.content,
-        file: fileData.file
+        file: fileData.file,
+        isSample: fileData.isSample
       });
 
       setSubmissionProgress(100);
@@ -92,10 +96,13 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
           <span>Back to Dashboard</span>
         </button>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-          New Legal Compliance Audit
+          New Contract Audit
         </h1>
         <p className="mt-1 text-xs sm:text-sm text-slate-500">
-          Evaluate employment agreements against verified Ethiopian Labour Proclamation No. 1156/2019.
+          The authenticated backend analyzes extracted clauses against eligible legal-source evidence. Findings are not legal determinations, and source coverage may be incomplete.
+        </p>
+        <p className="mt-2 text-xs text-amber-900" role="note">
+          OCR is not available. Scanned image-only PDFs may produce little or no usable text.
         </p>
 
         {/* Step Indicator */}
@@ -161,7 +168,9 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
             <h2 className="text-sm font-bold text-slate-900 mb-1">Step 1: Select Employment Contract</h2>
             <p className="text-xs text-slate-500 mb-4">
-              Upload an agreement. Pre-loaded scenarios are available when demo fallback is enabled.
+              {demoFallbackEnabled
+                ? 'Demo mode only runs client-side sample rules. Real document uploads are disabled while demo mode is enabled.'
+                : 'Upload an agreement for private processing by the authenticated backend. The backend does not use a bundled legal corpus.'}
             </p>
 
             <FileUploadDropzone
@@ -190,7 +199,7 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-6">
             <h2 className="text-sm font-bold text-slate-900 mb-1">Step 2: Document Information & Audit Scope</h2>
             <p className="text-xs text-slate-500">
-              Configure jurisdiction scope, document language, and audit rules.
+              Select document details and review scope.
             </p>
 
             {/* Document Type */}
@@ -203,10 +212,10 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
                 onChange={e => setDocumentType(e.target.value as AuditDocument['documentType'])}
                 className="w-full text-xs rounded-lg border border-slate-300 p-2.5 text-slate-900 bg-white focus:ring-2 focus:ring-slate-900 focus:outline-none"
               >
-                <option value="EMPLOYMENT_CONTRACT">Employment Contract (Labour Proclamation No. 1156/2019)</option>
-                <option value="COLLECTIVE_AGREEMENT">Collective Agreement (Articles 134-143)</option>
+                <option value="EMPLOYMENT_CONTRACT">Employment Contract</option>
+                <option value="COLLECTIVE_AGREEMENT">Collective Agreement</option>
                 <option value="COMPANY_BYLAW">Company Internal Bylaw / Work Rules</option>
-                <option value="CONSULTANCY_AGREEMENT">Independent Consultancy Agreement (Civil Code)</option>
+                <option value="CONSULTANCY_AGREEMENT">Independent Consultancy Agreement</option>
               </select>
             </div>
 
@@ -237,12 +246,16 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
               </div>
             </div>
 
-            {/* Review Options */}
+            {/* Demo rules are never represented as backend legal analysis. */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-2">
-                Active Audit Verifications
+                {demoFallbackEnabled ? 'Demo-only client-side rule checks' : 'Backend evidence review'}
               </label>
-              <div className="space-y-3">
+              {demoFallbackEnabled ? (
+                <div className="space-y-3">
+                  <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
+                    These illustrative keyword rules use hardcoded sample legal text. They are not sourced from verified backend records and must not be relied on as legal analysis.
+                  </p>
                 <label className="flex items-start gap-3 p-3 rounded-lg border border-slate-200 bg-slate-50/50 cursor-pointer">
                   <input
                     type="checkbox"
@@ -293,7 +306,12 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
                     </span>
                   </div>
                 </label>
-              </div>
+                </div>
+              ) : (
+                <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+                  The backend identifies clauses, retrieves eligible legal evidence, and requires validated citations for supported legal findings. No client-side legal rules are applied to uploaded documents.
+                </p>
+              )}
             </div>
 
             {/* Optional Description */}
@@ -315,7 +333,7 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
               <Info className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
               <div className="leading-relaxed">
                 <span className="font-semibold block mb-0.5">Scope & Limitations:</span>
-                This release audits contracts exclusively under Ethiopian Labour Proclamation No. 1156/2019 and relevant Civil Code service principles. Sectoral collective agreements and managerial exemptions may require specialized manual legal review.
+                Review results depend on the verified, applicable legal-source records currently indexed by the backend. The application does not bundle a verified legal corpus. Source gaps, extraction issues, and applicability uncertainty can limit findings; consult qualified counsel.
               </div>
             </div>
           </div>
@@ -344,7 +362,7 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-5">
             <h2 className="text-sm font-bold text-slate-900 mb-1">Step 3: Review Audit Parameters & Submit</h2>
             <p className="text-xs text-slate-500">
-              Please verify your selections before initiating automated compliance analysis.
+              Please verify the document and scope before submitting it for review.
             </p>
 
             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-3 text-xs">
@@ -361,17 +379,19 @@ export function NewAuditPage({ onNavigate }: NewAuditPageProps) {
                 <span className="font-semibold text-slate-900">{documentLanguage}</span>
               </div>
               <div className="flex items-center justify-between py-1 border-b border-slate-200">
-                <span className="text-slate-500">Primary Legal Baseline:</span>
-                <span className="font-semibold text-emerald-800">Labour Proclamation No. 1156/2019</span>
+                <span className="text-slate-500">Review method:</span>
+                <span className="font-semibold text-slate-800">
+                  {demoFallbackEnabled ? 'Synthetic demo rules (not verified)' : 'Backend evidence retrieval'}
+                </span>
               </div>
-              <div className="flex items-start justify-between py-1">
+              {demoFallbackEnabled && <div className="flex items-start justify-between py-1">
                 <span className="text-slate-500">Active Checks:</span>
                 <div className="text-right space-y-0.5 font-medium text-slate-800">
                   {reviewOptions.checkLegalConflicts && <div>· Potential Legal Conflicts</div>}
-                  {reviewOptions.checkMissingClauses && <div>· Missing Mandatory Clauses</div>}
-                  {reviewOptions.checkOutdatedReferences && <div>· Repealed Proclamation Citations</div>}
+                  {reviewOptions.checkMissingClauses && <div>· Keyword matches for clause presence</div>}
+                  {reviewOptions.checkOutdatedReferences && <div>· Keyword matches for old references</div>}
                 </div>
-              </div>
+              </div>}
             </div>
 
             {/* Submission Progress bar when submitting */}

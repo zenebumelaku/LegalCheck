@@ -112,6 +112,7 @@ def test_upload_pdf_extracts_text_and_keeps_storage_private(
     )
 
     assert response.status_code == 201
+    assert response.headers["cache-control"] == "private, no-store"
     body = response.json()
     assert body["document_type"] == "pdf"
     assert body["original_filename"] == "Employment contract.pdf"
@@ -150,7 +151,11 @@ def test_upload_docx_preserves_paragraph_references_without_fake_page_number(
     assert page["paragraphs"][1]["text"] == "Contract table clause."
 
 
-def test_scan_like_pdf_returns_ocr_warning(document_client: TestClient) -> None:
+def test_scan_like_pdf_returns_ocr_warning(
+    document_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "ocr_enabled", True)
     _, token = _register_and_token(document_client, "scan@example.com")
 
     response = _upload(
@@ -164,6 +169,7 @@ def test_scan_like_pdf_returns_ocr_warning(document_client: TestClient) -> None:
     assert response.status_code == 201
     assert response.json()["processing_status"] == "warning"
     assert any("scanned" in warning.lower() for warning in response.json()["warnings"])
+    assert any("no OCR provider is integrated" in warning for warning in response.json()["warnings"])
 
 
 def test_upload_rejects_unsupported_extension(document_client: TestClient) -> None:

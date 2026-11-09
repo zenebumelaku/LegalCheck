@@ -30,7 +30,7 @@ export function runTests() {
   const probationFinding = result1.findings.find(f => f.category === 'PROBATION');
   assert(!!probationFinding, 'Identifies probation period exceeding statutory 60 working days');
   assert(probationFinding?.severity === 'CRITICAL', 'Probation violation is marked CRITICAL');
-  assert(probationFinding?.legalProvision.articleNumber === 'Article 9', 'Cites Article 9 correctly');
+  assert(probationFinding?.legalProvision?.articleNumber === 'Article 9', 'Cites Article 9 correctly');
 
   // Test 2: Maternity Leave Extension to 120 Days (Article 88)
   const contractWithOutdatedMaternity = `
@@ -43,7 +43,7 @@ export function runTests() {
   });
   const maternityFinding = result2.findings.find(f => f.category === 'MATERNITY_AND_WOMEN');
   assert(!!maternityFinding, 'Flags outdated 90-day maternity leave');
-  assert(maternityFinding?.legalProvision.articleNumber === 'Article 88', 'Cites Article 88 correctly');
+  assert(maternityFinding?.legalProvision?.articleNumber === 'Article 88', 'Cites Article 88 correctly');
 
   // Test 3: Repealed Proclamation 377/2003 Citation
   const contractWithOldCite = `

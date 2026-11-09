@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Generator
@@ -125,6 +125,7 @@ def _create_completed_report(
         jurisdiction="ET",
         language="en",
         legal_status="current",
+        effective_date=date(2020, 1, 1),
         verification_status="verified",
         verified_by=user.id,
         verified_at=datetime.now(timezone.utc),
@@ -242,6 +243,16 @@ def test_uploaded_document_audit_lifecycle_and_duplicate_delivery(
 
     storage.read = checked_read
     import app.services.compliance_analysis as analysis_module
+    import app.services.legal_question_answering as legal_question_module
+
+    def reject_legal_answer_cache_access():
+        raise AssertionError("Contract audit must not access the legal Q&A cache.")
+
+    monkeypatch.setattr(
+        legal_question_module,
+        "get_legal_question_cache",
+        reject_legal_answer_cache_access,
+    )
 
     original_retrieve = analysis_module.retrieve_legal_evidence
 
@@ -291,12 +302,18 @@ def test_uploaded_document_audit_lifecycle_and_duplicate_delivery(
     assert audit.analysis_version == "1"
     assert audit.model_identifier == "test-only-mock-analyzer:fixture-v1"
     assert db.scalar(select(Finding).where(Finding.audit_id == audit_id)) is not None
+    audit_response = client.get(
+        f"/api/v1/audits/{audit_id}",
+        headers={"Authorization": f"******"},
+    )
+    assert audit_response.headers["cache-control"] == "private, no-store"
 
     findings_response = client.get(
         f"/api/v1/audits/{audit_id}/findings",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert findings_response.status_code == 200
+    assert findings_response.headers["cache-control"] == "private, no-store"
     findings = findings_response.json()["findings"]
     assert len(findings) == 1
     assert findings[0]["category"] == "insufficient_evidence"
@@ -683,10 +700,11 @@ def test_invalid_transition_and_processing_failure_do_not_complete(audit_client)
     owner = User(name="Transition User", email="transition@example.com", password_hash="test")
     db.add(owner)
     db.flush()
+    storage_key = f"{uuid4().hex}.docx"
     document = Document(
         owner=owner,
         original_filename="contract.docx",
-        storage_key="docs/transition",
+        storage_key=storage_key,
         content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         file_size=len(_docx_bytes()),
         document_type="docx",
@@ -708,7 +726,7 @@ def test_invalid_transition_and_processing_failure_do_not_complete(audit_client)
         raise AssertionError("The invalid initial state should have been rejected.")
     assert db.get(Audit, audit.id).audit_status == "queued"
 
-    storage.store("docs/transition", _docx_bytes())
+    storage.store(storage_key, _docx_bytes())
     assert run_audit_job(
         audit.id,
         db=db,

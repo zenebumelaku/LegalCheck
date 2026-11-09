@@ -52,13 +52,13 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
       <div className="bg-slate-900 text-white rounded-xl border-l-4 border-amber-500 p-6 sm:p-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6 shadow-sm">
         <div className="space-y-1.5">
           <div className="text-[11px] font-bold text-amber-400 tracking-widest uppercase">
-            Ethiopian Labour Law Compliance Chamber · Proclamation No. 1156/2019
+            Contract review workspace
           </div>
           <h1 className="font-serif-legal text-xl sm:text-2xl font-bold tracking-wide text-white">
-            Welcome, {currentUser?.fullName || 'Tewodros Kassahun'}
+            {currentUser ? `Welcome, ${currentUser.fullName}` : 'Welcome'}
           </h1>
           <p className="text-xs sm:text-sm text-slate-300 max-w-xl leading-relaxed">
-            Active compliance console for <span className="text-white font-semibold">{currentUser?.organization || 'Addis Tech Solutions PLC'}</span>. All contracts are verified against controlling Negarit Gazeta provisions.
+            Review contracts{currentUser?.organization ? <> for <span className="font-semibold text-white">{currentUser.organization}</span></> : ''} using legal-source evidence available to the backend. Findings are preliminary and may be limited by source coverage, document extraction, or applicability.
           </p>
         </div>
 
@@ -107,14 +107,14 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
           {/* Critical Issues Identified */}
           <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
             <div className="flex items-center justify-between text-slate-500 mb-2">
-              <span className="text-xs font-medium">Critical Issues Flagged</span>
+              <span className="text-xs font-medium">Critical-severity Findings</span>
               <AlertTriangle className="w-4 h-4 text-rose-600" />
             </div>
             <div className="text-2xl font-bold font-mono text-rose-800 tabular-nums">
               {stats?.criticalIssuesFound || 0}
             </div>
             <div className="mt-1 text-[11px] text-slate-400">
-              Violations needing immediate amendment
+              Review priority; not a legal determination
             </div>
           </div>
 
@@ -154,7 +154,7 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
           <div className="p-6">
             <EmptyState
               title="No Audits Performed Yet"
-              description="Upload an employment contract to initiate your first verified compliance assessment under Labour Proclamation No. 1156/2019."
+              description="Upload an employment contract for an evidence-based review. The backend only supports findings with validated eligible citations; no findings does not establish legal compliance."
               actionLabel="Upload First Contract"
               onAction={() => onNavigate('/audits/new')}
             />
@@ -190,12 +190,14 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
                       <AuditStatusBadge status={audit.status} />
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap font-mono">
-                      {audit.criticalCount > 0 ? (
+                      {audit.isDemoOnly ? (
+                        <span className="font-semibold text-amber-800">DEMO ONLY</span>
+                      ) : audit.criticalCount > 0 ? (
                         <span className="text-rose-700 font-semibold">
-                          {audit.criticalCount} Critical
+                          {audit.criticalCount} Critical-priority
                         </span>
                       ) : (
-                        <span className="text-emerald-700 font-semibold">0 Critical</span>
+                        <span className="text-slate-600 font-semibold">No critical-priority findings</span>
                       )}
                       <span className="text-slate-300 mx-1.5">·</span>
                       <span className="text-slate-500">{audit.totalFindings} findings</span>
@@ -224,7 +226,7 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
 
       {/* Quick Access Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Verified Legal Sources Link */}
+        {/* Legal source records */}
         <div
           onClick={() => onNavigate('/legal-sources')}
           className="bg-white p-5 rounded-xl border border-slate-200 hover:border-slate-300 transition-all cursor-pointer group shadow-xs"
@@ -236,10 +238,10 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
             <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-slate-900 transition-colors" />
           </div>
           <h3 className="text-sm font-bold text-slate-900 mb-1">
-            Browse Verified Ethiopian Legal Sources
+            Browse Legal Source Records
           </h3>
           <p className="text-xs text-slate-500 leading-relaxed">
-            Inspect Labour Proclamation No. 1156/2019 articles, Civil Code provisions, and Gazeta annotations.
+            Inspect legal-source records and their review status.
           </p>
         </div>
 
