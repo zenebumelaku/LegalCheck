@@ -1,37 +1,20 @@
 # LegalCheck Ethiopia
 
-AI-assisted legal compliance auditing platform for Ethiopian businesses, HR professionals, and authorized legal reviewers, grounded in verified Ethiopian statutory sources focusing on **Labour Proclamation No. 1156/2019** and the **Civil Code of Ethiopia (1960)**.
+Frontend for the LegalCheck Ethiopia application. It connects to the existing
+FastAPI backend for authentication, legal questions, legal-source records, and
+contract audits. The repository does not include a verified legal corpus;
+displayed legal results depend on source records that have been independently
+verified and made eligible in the backend.
 
 ---
 
 ## Key Features
 
-1. **Document Compliance Auditing Wizard (`/audits/new`)**
-   - 3-step structured wizard: Upload (PDF, DOCX, TXT), Document Information & Scope, and Confirmation.
-   - Built-in sample contracts reflecting actual Ethiopian business scenarios (Tech Startup, Manufacturing Plant Operator, Commercial Account Executive).
-   - Analysis covers statutory probation period limits (max 60 working days), working hours ceiling (48 hrs/wk), overtime compensation rates (Article 66), statutory maternity leave (120 consecutive days), annual leave (16 working days minimum), non-compete reasonableness (Civil Code Art. 2589), and mandatory PPE.
-
-2. **Audit Findings & Reports (`/audits/:id`)**
-   - Issue severity categorization: Critical, High, Medium, Low, Informational.
-   - Distinct finding types: Potential Legal Conflict, Missing or Incomplete Clause, Outdated Legal Reference, Informational Observation.
-   - Clause excerpts contrasted side-by-side with official Proclamation text and Negarit Gazeta citations.
-   - Instant Client-side PDF Report Generation (`jspdf`).
-   - "View Legal Source" modal providing full English and Amharic Gazette statutory wording.
-   - "Report Inaccuracy" feedback workflow.
-
-3. **Verified Ethiopian Legal Sources (`/legal-sources`)**
-   - Full repository of Labour Proclamation No. 1156/2019, Civil Code Title XVI, and Commercial Registration No. 980/2016.
-   - Annotated status badges: *In Force*, *Partially Amended*, *Repealed/Superseded* (Proclamation No. 377/2003).
-   - Provenance tracking including legislative publisher, Federal Negarit Gazeta volume, and verification records.
-
-4. **Dashboard & History (`/dashboard`, `/audits`)**
-   - Verified audit metrics (total audits, completed, critical issues flagged, awaiting queue).
-   - Search by document name and description, filters by audit status and type, sorting by date or finding count.
-
-5. **Authentication & Governance (`/login`, `/register`, `/forgot-password`, `/settings`, `/profile`)**
-   - Organization registration with company name and designated compliance role.
-   - Configurable document data retention cycles (30 days, 90 days, 1 year, indefinite).
-   - Secure session handling.
+The frontend includes the legal Q&A page, audit and document flows, legal-source
+views, and opt-in synthetic demo screens. Backend API responses are distinct
+from the demo-only client-side rules. Demo output is illustrative and must not
+be treated as verified legal analysis. Actual source availability, authority,
+and applicability are determined by backend source records and review status.
 
 ---
 
@@ -101,4 +84,8 @@ npm run build
 
 ## Legal Notice
 
-LegalCheck Ethiopia provides automated legal compliance intelligence based on Labour Proclamation No. 1156/2019. It does not constitute formal legal counsel, attorney-client privilege, or representation by licensed Ethiopian advocates.
+LegalCheck is not legal advice, does not establish that a source is current or
+applicable, and does not replace review by a qualified Ethiopian legal
+professional. No legal accuracy or verified-corpus claim is made by this
+frontend. Synthetic demo rules and sample contracts are not evidence of
+Ethiopian law.
