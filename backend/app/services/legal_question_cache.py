@@ -3,7 +3,8 @@ import json
 import logging
 import unicodedata
 from functools import lru_cache
-from typing import Optional, Protocol
+from threading import Lock
+from typing import Literal, Optional, Protocol
 
 from redis import Redis
 from redis.exceptions import RedisError
@@ -18,10 +19,19 @@ logger = logging.getLogger(__name__)
 
 LEGAL_QUESTION_PROMPT_VERSION = "v1"
 _CACHE_KEY_PREFIX = "legalcheck:legal-qa"
+CacheMetric = Literal[
+    "hits",
+    "misses",
+    "errors",
+    "provider_calls",
+    "provider_calls_avoided",
+]
 
 
 class LegalQuestionCache(Protocol):
     def get(self, key: str) -> Optional[LegalQuestionAnswer]: ...
+
+    def ping(self) -> bool: ...
 
     def set(
         self,
@@ -29,6 +39,67 @@ class LegalQuestionCache(Protocol):
         answer: LegalQuestionAnswer,
         ttl_seconds: int,
     ) -> None: ...
+
+
+class LegalQuestionCacheMetrics:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._counts = {
+            "hits": 0,
+            "misses": 0,
+            "errors": 0,
+            "logical_invalidations": 0,
+            "provider_calls": 0,
+            "provider_calls_avoided": 0,
+        }
+        self._last_knowledge_base_version: Optional[str] = None
+
+    def record(self, metric: CacheMetric) -> None:
+        with self._lock:
+            self._counts[metric] += 1
+
+    def observe_knowledge_base_version(self, version: str) -> None:
+        with self._lock:
+            if (
+                self._last_knowledge_base_version is not None
+                and self._last_knowledge_base_version != version
+            ):
+                self._counts["logical_invalidations"] += 1
+            self._last_knowledge_base_version = version
+
+    def snapshot(self) -> dict[str, int | str]:
+        with self._lock:
+            return {
+                **self._counts,
+                "scope": "process_local",
+                "reset_behavior": (
+                    "Counters reset when this application process restarts; "
+                    "each worker maintains separate counters."
+                ),
+                "hits_meaning": "Usable validated cached answers returned.",
+                "misses_meaning": (
+                    "Cache lookups that returned no usable cached answer."
+                ),
+                "errors_meaning": (
+                    "Redis get, set, delete, or health-ping operations that failed."
+                ),
+                "logical_invalidations_meaning": (
+                    "Knowledge-base version changes detected during cache key "
+                    "generation after the initial version; old versioned keys "
+                    "are not physically deleted."
+                ),
+                "provider_calls_meaning": (
+                    "Invocations of the configured legal-question generation "
+                    "provider."
+                ),
+                "provider_calls_avoided_meaning": (
+                    "Validated cache hits that returned before provider "
+                    "invocation; this is not billing telemetry."
+                ),
+            }
+
+
+legal_question_cache_metrics = LegalQuestionCacheMetrics()
 
 
 class RedisLegalQuestionCache:
@@ -54,6 +125,7 @@ class RedisLegalQuestionCache:
             try:
                 self._redis.delete(key)
             except RedisError:
+                legal_question_cache_metrics.record("errors")
                 logger.warning("Could not remove invalid legal-question cache entry")
             return None
         if answer.status != "answered" or not answer.citations:
@@ -61,9 +133,13 @@ class RedisLegalQuestionCache:
             try:
                 self._redis.delete(key)
             except RedisError:
+                legal_question_cache_metrics.record("errors")
                 logger.warning("Could not remove unsupported legal-question cache entry")
             return None
         return answer
+
+    def ping(self) -> bool:
+        return bool(self._redis.ping())
 
     def set(
         self,

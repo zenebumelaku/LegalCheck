@@ -19,7 +19,10 @@ from app.db.models import (
 from app.db.session import get_db
 from app.main import app
 from app.schemas.legal_questions import LegalQuestionAnswer
-from app.services.legal_question_cache import legal_question_cache_key
+from app.services.legal_question_cache import (
+    legal_question_cache_key,
+    legal_question_cache_metrics,
+)
 from app.services.llm_provider import LLMProviderError, LLMProviderRateLimitError
 import app.services.legal_question_answering as legal_question_answering
 
@@ -290,6 +293,7 @@ def test_second_normalized_question_hits_cache_before_retrieval_or_generation(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    metrics_before = legal_question_cache_metrics.snapshot()
     user_id, token = _login(legal_question_client)
     provision = _add_source(db_session, user_id=user_id)
     provider = MockQuestionProvider(_supported_response(provision))
@@ -326,6 +330,15 @@ def test_second_normalized_question_hits_cache_before_retrieval_or_generation(
     assert len(provider.calls) == 1
     assert len(answer_cache.get_calls) == 2
     assert answer_cache.get_calls[0] == answer_cache.get_calls[1]
+    metrics_after = legal_question_cache_metrics.snapshot()
+    assert metrics_after["hits"] - metrics_before["hits"] == 1
+    assert metrics_after["misses"] - metrics_before["misses"] == 1
+    assert metrics_after["provider_calls"] - metrics_before["provider_calls"] == 1
+    assert (
+        metrics_after["provider_calls_avoided"]
+        - metrics_before["provider_calls_avoided"]
+        == 1
+    )
 
 
 @pytest.mark.parametrize("change_kind", ["source_change", "reindex"])
@@ -345,6 +358,7 @@ def test_knowledge_base_changes_invalidate_previous_answer(
     )
     first = _ask(legal_question_client, token)
     assert first.status_code == 200 and first.json()["cache_hit"] is False
+    metrics_before_change = legal_question_cache_metrics.snapshot()
 
     if change_kind == "source_change":
         provision.legal_source.title = "Updated synthetic fixture source"
@@ -368,6 +382,12 @@ def test_knowledge_base_changes_invalidate_previous_answer(
     assert second.json()["cache_hit"] is False
     assert len(provider.calls) == 2
     assert answer_cache.get_calls[0] != answer_cache.get_calls[1]
+    metrics_after_change = legal_question_cache_metrics.snapshot()
+    assert (
+        metrics_after_change["logical_invalidations"]
+        - metrics_before_change["logical_invalidations"]
+        == 1
+    )
 
 
 def test_cache_key_includes_explicit_cache_version_and_normalizes_question() -> None:
@@ -674,6 +694,7 @@ def test_redis_failure_fails_open_without_cache_hit_or_write(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    metrics_before = legal_question_cache_metrics.snapshot()
     user_id, token = _login(legal_question_client)
     provision = _add_source(db_session, user_id=user_id)
     provider = MockQuestionProvider(_supported_response(provision))
@@ -690,6 +711,8 @@ def test_redis_failure_fails_open_without_cache_hit_or_write(
     assert response.json()["cache_hit"] is False
     assert len(provider.calls) == 1
     assert answer_cache.set_calls == []
+    metrics_after = legal_question_cache_metrics.snapshot()
+    assert metrics_after["errors"] - metrics_before["errors"] == 1
 
 
 def test_redis_write_failure_still_returns_validated_answer(

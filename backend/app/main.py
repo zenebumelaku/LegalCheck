@@ -51,7 +51,14 @@ app.add_middleware(
 
 _PRIVATE_API_PREFIXES = tuple(
     f"{settings.api_v1_prefix}/{resource}"
-    for resource in ("audits", "documents", "findings", "legal-questions")
+    for resource in (
+        "audits",
+        "documents",
+        "findings",
+        "legal-questions",
+        "health/answer-cache",
+        "admin/legal-question-cache",
+    )
 )
 
 

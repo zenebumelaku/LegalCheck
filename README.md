@@ -406,6 +406,21 @@ never contract text or audit output. User identity is omitted only for public
 questions whose answer depends exclusively on public legal sources and request
 context; conversation answers use the owner-scoped key described above.
 
+Administrative cache observability is available at
+`GET /api/v1/admin/legal-question-cache/metrics` and
+`GET /api/v1/health/answer-cache`; both require the server-side `admin` role.
+Metrics are process-local and separate per application worker; they reset when
+that process restarts and are not persisted. Hits are usable validated answers,
+misses are lookups with no usable answer, and errors count failed Redis
+get/set/delete/health-ping operations. Provider calls count actual generation
+invocations; provider calls avoided count validated cache hits that returned
+before generation, not billing telemetry. Logical invalidations count
+knowledge-base version changes observed while generating cache keys after an
+initial baseline; versioned keys make old answers unreachable, but the old
+Redis entries are not physically deleted. The health endpoint reports Redis
+reachability only and explicitly does not assess the AI system. No cache
+statistics dashboard is exposed in the frontend.
+
 To exercise the cache against a real Redis server locally, start Redis (for
 example, `redis-server` in another terminal), then run from `backend/`:
 

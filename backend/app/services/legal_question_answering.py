@@ -25,6 +25,7 @@ from app.services.legal_question_cache import (
     get_legal_question_cache,
     legal_knowledge_base_version,
     legal_question_cache_key,
+    legal_question_cache_metrics,
     normalize_legal_question,
 )
 from app.services.legal_retrieval import retrieve_legal_evidence
@@ -190,6 +191,10 @@ def answer_legal_question(
     if current_settings.legal_qa_cache_ttl_seconds > 0:
         try:
             cache = cache or get_legal_question_cache()
+            knowledge_base_version = legal_knowledge_base_version(db)
+            legal_question_cache_metrics.observe_knowledge_base_version(
+                knowledge_base_version
+            )
             cache_key = legal_question_cache_key(
                 question=normalized_question,
                 context={
@@ -202,16 +207,20 @@ def answer_legal_question(
                         else None
                     ),
                 },
-                knowledge_base_version=legal_knowledge_base_version(db),
+                knowledge_base_version=knowledge_base_version,
                 settings=current_settings,
             )
             cached_answer = cache.get(cache_key)
             cache_available = True
             if cached_answer is not None:
+                legal_question_cache_metrics.record("hits")
+                legal_question_cache_metrics.record("provider_calls_avoided")
                 return cached_answer.model_copy(
                     update={"question": normalized_question, "cache_hit": True}
                 )
+            legal_question_cache_metrics.record("misses")
         except RedisError as exc:
+            legal_question_cache_metrics.record("errors")
             logger.warning(
                 "Legal-question answer cache is unavailable; continuing without cache",
                 extra={"error_type": type(exc).__name__},
@@ -254,6 +263,7 @@ def answer_legal_question(
         ) from exc
 
     try:
+        legal_question_cache_metrics.record("provider_calls")
         raw_response = provider.answer_legal_question(
             contextual_question,
             [_evidence_payload(result) for result in eligible_results],
@@ -336,6 +346,7 @@ def answer_legal_question(
                 current_settings.legal_qa_cache_ttl_seconds,
             )
         except RedisError as exc:
+            legal_question_cache_metrics.record("errors")
             logger.warning(
                 "Legal-question answer could not be cached",
                 extra={"error_type": type(exc).__name__},
