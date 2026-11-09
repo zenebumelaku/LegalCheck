@@ -93,6 +93,11 @@ class User(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    password_reset_tokens: Mapped[List["PasswordResetToken"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     legal_question_conversations: Mapped[List["LegalQuestionConversation"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -120,6 +125,40 @@ class AuthSession(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="auth_sessions")
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+    __table_args__ = (
+        Index(
+            "ix_password_reset_tokens_user_expiry",
+            "user_id",
+            "expires_at",
+        ),
+        Index("ix_password_reset_tokens_expiry", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    user: Mapped["User"] = relationship(back_populates="password_reset_tokens")
 
 
 class LegalQuestionConversation(Base):

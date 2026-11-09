@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 import pytest
@@ -8,11 +10,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_organization_membership, require_roles
-from app.core.security import hash_access_token
-from app.db.models import AuthSession, Organization, OrganizationMembership, User
+from app.api.routes import auth as auth_routes
+from app.core.config import Settings
+from app.core.security import hash_access_token, verify_password
+from app.db.models import (
+    AuthSession,
+    Organization,
+    OrganizationMembership,
+    PasswordResetToken,
+    User,
+)
 from app.db.session import get_db
 from app.main import app
 from app.schemas.auth import RegisterRequest
+from app.services.password_reset_email import PasswordResetEmailError
 
 
 @pytest.fixture
@@ -204,7 +215,23 @@ def test_logout_revokes_the_current_session(
 
 def test_password_reset_request_does_not_claim_email_delivery(
     auth_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    configured_settings = Settings(
+        password_reset_email_provider="resend",
+        resend_api_key="test-resend-key",
+        password_reset_from_email="no-reply@example.com",
+    )
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(auth_routes, "settings", configured_settings)
+    monkeypatch.setattr(
+        auth_routes,
+        "send_password_reset_email",
+        lambda email, url, *, settings: sent.append((email, url)),
+    )
+    register(auth_client)
+
     known = auth_client.post(
         "/api/v1/auth/password-reset-request",
         json={"email": "user@example.com"},
@@ -216,7 +243,152 @@ def test_password_reset_request_does_not_claim_email_delivery(
 
     assert known.status_code == 202
     assert known.json() == unknown.json()
-    assert "after email delivery is configured" in known.json()["message"]
+    assert "If an account exists" in known.json()["message"]
+    assert len(sent) == 1
+    assert sent[0][0] == "user@example.com"
+
+    reset_token = parse_qs(urlsplit(sent[0][1]).fragment)["token"][0]
+    stored_token = db_session.scalar(select(PasswordResetToken))
+    assert reset_token not in known.text
+    assert len(reset_token) >= 32
+    assert stored_token is not None
+    assert stored_token.token_hash == hash_access_token(reset_token)
+    assert stored_token.token_hash != reset_token
+
+
+def test_password_reset_consumes_token_and_revokes_sessions(
+    auth_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    register(auth_client)
+    login_response = login(auth_client)
+    old_access_token = login_response.json()["access_token"]
+    configured_settings = Settings(
+        password_reset_email_provider="resend",
+        resend_api_key="test-resend-key",
+        password_reset_from_email="no-reply@example.com",
+    )
+    sent_urls: list[str] = []
+    monkeypatch.setattr(auth_routes, "settings", configured_settings)
+    monkeypatch.setattr(
+        auth_routes,
+        "send_password_reset_email",
+        lambda email, url, *, settings: sent_urls.append(url),
+    )
+
+    requested = auth_client.post(
+        "/api/v1/auth/password-reset-request",
+        json={"email": "user@example.com"},
+    )
+    reset_token = parse_qs(urlsplit(sent_urls[0]).fragment)["token"][0]
+    stored_token = db_session.scalar(select(PasswordResetToken))
+    assert stored_token is not None
+    assert stored_token.token_hash == hash_access_token(reset_token)
+    assert stored_token.token_hash != reset_token
+    assert reset_token not in requested.text
+
+    completed = auth_client.post(
+        "/api/v1/auth/password-reset-confirm",
+        json={"token": reset_token, "password": "a-new-long-password"},
+    )
+    user = db_session.scalar(select(User).where(User.email == "user@example.com"))
+    session = db_session.scalar(
+        select(AuthSession).where(
+            AuthSession.token_hash == hash_access_token(old_access_token)
+        )
+    )
+    assert completed.status_code == 200
+    assert user is not None and verify_password(user.password_hash, "a-new-long-password")
+    assert session is not None and session.revoked_at is not None
+    assert stored_token.consumed_at is not None
+
+    replay = auth_client.post(
+        "/api/v1/auth/password-reset-confirm",
+        json={"token": reset_token, "password": "another-new-long-password"},
+    )
+    assert replay.status_code == 400
+
+
+def test_password_reset_is_unavailable_without_provider_configuration(
+    auth_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(auth_routes, "settings", Settings())
+    known = auth_client.post(
+        "/api/v1/auth/password-reset-request",
+        json={"email": "known@example.com"},
+    )
+    unknown = auth_client.post(
+        "/api/v1/auth/password-reset-request",
+        json={"email": "missing@example.com"},
+    )
+
+    assert known.status_code == unknown.status_code == 503
+    assert known.json() == unknown.json()
+    assert known.json()["error"]["message"] == (
+        "Password reset email is not configured."
+    )
+
+
+def test_password_reset_delivery_failure_revokes_unmailed_token(
+    auth_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    register(auth_client)
+    configured_settings = Settings(
+        password_reset_email_provider="resend",
+        resend_api_key="test-resend-key",
+        password_reset_from_email="no-reply@example.com",
+    )
+    monkeypatch.setattr(auth_routes, "settings", configured_settings)
+
+    def fail_delivery(email: str, url: str, *, settings: Settings) -> None:
+        raise PasswordResetEmailError("provider unavailable")
+
+    monkeypatch.setattr(auth_routes, "send_password_reset_email", fail_delivery)
+    response = auth_client.post(
+        "/api/v1/auth/password-reset-request",
+        json={"email": "user@example.com"},
+    )
+
+    token = db_session.scalar(select(PasswordResetToken))
+    assert response.status_code == 202
+    assert "If an account exists" in response.json()["message"]
+    assert token is not None and token.revoked_at is not None
+    assert token.token_hash not in response.text
+
+
+def test_password_reset_rejects_expired_tokens_and_weak_passwords(
+    auth_client: TestClient,
+    db_session: Session,
+) -> None:
+    user_response = register(auth_client)
+    expired_token = "expired-reset-token-that-is-long-enough"
+    db_session.add(
+        PasswordResetToken(
+            user_id=UUID(user_response["id"]),
+            token_hash=hash_access_token(expired_token),
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+    )
+    db_session.commit()
+
+    expired = auth_client.post(
+        "/api/v1/auth/password-reset-confirm",
+        json={"token": expired_token, "password": "a-new-long-password"},
+    )
+    weak = auth_client.post(
+        "/api/v1/auth/password-reset-confirm",
+        json={"token": expired_token, "password": "short"},
+    )
+
+    assert expired.status_code == 400
+    assert expired.json()["error"]["message"] == (
+        "The password reset token is invalid or expired."
+    )
+    assert weak.status_code == 422
 
 
 def test_organization_membership_helper_uses_authenticated_user(

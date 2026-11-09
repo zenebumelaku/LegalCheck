@@ -1,8 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import EmailStr, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +16,11 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=list)
     log_level: str = "INFO"
     access_token_expire_minutes: int = Field(default=60, gt=0, le=1440)
+    password_reset_email_provider: Literal["disabled", "resend"] = "disabled"
+    resend_api_key: Optional[SecretStr] = None
+    password_reset_from_email: Optional[EmailStr] = None
+    password_reset_frontend_url: str = "http://localhost:3000"
+    password_reset_token_expire_minutes: int = Field(default=30, gt=0, le=1440)
     max_upload_size_mb: int = Field(default=10, gt=0, le=100)
     max_docx_uncompressed_size_mb: int = Field(default=50, gt=0, le=500)
     private_storage_path: Path = Path("var/private-documents")
@@ -64,6 +70,11 @@ class Settings(BaseSettings):
     def empty_embedding_model_path_is_unset(cls, value: object) -> object:
         return None if value == "" else value
 
+    @field_validator("resend_api_key", "password_reset_from_email", mode="before")
+    @classmethod
+    def empty_password_reset_values_are_unset(cls, value: object) -> object:
+        return None if value == "" else value
+
     @model_validator(mode="after")
     def validate_audit_timeouts(self) -> "Settings":
         if self.audit_stale_after_seconds <= self.audit_job_timeout_seconds:
@@ -72,6 +83,26 @@ class Settings(BaseSettings):
             )
         if "*" in self.cors_origins:
             raise ValueError("Wildcard CORS origins are not permitted.")
+        parsed_reset_url = urlsplit(self.password_reset_frontend_url)
+        if (
+            parsed_reset_url.scheme not in {"http", "https"}
+            or not parsed_reset_url.netloc
+            or parsed_reset_url.username
+            or parsed_reset_url.password
+            or parsed_reset_url.query
+            or parsed_reset_url.fragment
+        ):
+            raise ValueError(
+                "PASSWORD_RESET_FRONTEND_URL must be an HTTP(S) origin or base path."
+            )
+        if (
+            self.app_environment == "production"
+            and self.password_reset_email_provider == "resend"
+            and parsed_reset_url.scheme != "https"
+        ):
+            raise ValueError(
+                "PASSWORD_RESET_FRONTEND_URL must use HTTPS in production."
+            )
         return self
 
     @property

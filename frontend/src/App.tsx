@@ -26,7 +26,7 @@ import { LegalChatPage } from './views/LegalChatPage';
 import { SettingsPage, ProfilePage } from './views/SettingsPages';
 
 export default function App() {
-  const { path, navigate } = useRouter();
+  const { path, searchParams, navigate } = useRouter();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
@@ -167,7 +167,14 @@ export default function App() {
               <RegisterPage onNavigate={navigate} onAuthSuccess={handleAuthSuccess} />
             )}
             {path === '/forgot-password' && (
-              <ForgotPasswordPage onNavigate={navigate} />
+              <ForgotPasswordPage
+                onNavigate={navigate}
+                resetToken={
+                  searchParams.token ??
+                  new URLSearchParams(window.location.hash.slice(1)).get('token') ??
+                  undefined
+                }
+              />
             )}
             {path === '/legal-sources' && <LegalSourcesPage />}
           </main>

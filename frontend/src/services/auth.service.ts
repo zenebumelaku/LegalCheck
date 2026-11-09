@@ -145,6 +145,13 @@ export class AuthService {
     return { success: true, message: response.message };
   }
 
+  static async confirmPasswordReset(token: string, password: string): Promise<{ message: string }> {
+    return apiRequest<{ message: string }>('/api/v1/auth/password-reset-confirm', {
+      method: 'POST',
+      body: JSON.stringify({ token, password })
+    });
+  }
+
   static async updateProfile(updates: Partial<User>): Promise<User> {
     if (!isDemoFallbackEnabled()) {
       throw new Error('Profile updates require the backend profile API to be available.');

@@ -62,6 +62,11 @@ class PasswordResetRequest(AuthRequest):
         return str(value).strip().lower()
 
 
+class PasswordResetConfirmRequest(AuthRequest):
+    token: str = Field(min_length=32, max_length=256)
+    password: SecretStr = Field(min_length=12, max_length=128)
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,4 +86,8 @@ class LoginResponse(BaseModel):
 
 
 class PasswordResetResponse(BaseModel):
+    message: str
+
+
+class PasswordResetCompleteResponse(BaseModel):
     message: str

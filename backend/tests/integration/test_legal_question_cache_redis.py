@@ -172,7 +172,7 @@ def test_real_redis_cache_aside_request_hit_and_knowledge_base_invalidation(
                 "/api/v1/auth/register",
                 json={
                     "name": "Redis Integration Test",
-                    "email": f"{uuid4()}@example.test",
+                    "email": f"{uuid4().hex}@example.com",
                     "password": "a-long-redis-integration-password",
                 },
             )

@@ -91,6 +91,27 @@ The frontend does not contain provider credentials. Keep
 `VITE_ENABLE_DEMO_FALLBACK=false` except when intentionally testing the visibly
 labeled synthetic demo behavior.
 
+## Password reset email
+
+Password reset is available only when the backend email provider is configured.
+The default `PASSWORD_RESET_EMAIL_PROVIDER=disabled` makes the request endpoint
+return an explicit configuration error. To enable Resend, set
+`PASSWORD_RESET_EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, and
+`PASSWORD_RESET_FROM_EMAIL` in the backend's ignored `.env` file. The sender
+address must be authorized in the Resend account. Set
+`PASSWORD_RESET_FRONTEND_URL` to the frontend origin; production must use
+HTTPS. `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` defaults to 30.
+
+The request API uses the same generic response for registered and unknown email
+addresses. Reset tokens are random, one-time values; only their SHA-256 hashes
+are stored, and the emailed link carries its token in the URL fragment so it is
+not sent to the web server in the HTTP request. Successful password changes
+consume the token and revoke existing login sessions. Resend failures are
+logged without the email address, token, or API key, while the public request
+response remains generic to avoid account enumeration. No email is delivered
+until valid Resend credentials and a sender are configured. Never put Resend
+credentials in frontend environment variables or source control.
+
 ## Environment and providers
 
 `backend/.env.example` lists supported backend settings; copy it to `.env` and
@@ -174,7 +195,8 @@ alembic upgrade head
 ```
 
 Apply migrations before starting the API so the full application schema,
-including the `auth_sessions` table and case-insensitive email index, exists.
+including authentication sessions, password-reset tokens, and the
+case-insensitive email index, exists.
 
 Create future migrations after changing the models with:
 
@@ -257,14 +279,17 @@ access controls. Original filenames are metadata only; generated keys identify
 stored objects. The ordinary document metadata endpoints never return storage
 keys or file contents.
 
-Uploads accept PDF and DOCX only. PDFs with little/no text include a scanned
-document warning. OCR is not bundled; setting `OCR_ENABLED=true` currently
-reports that no OCR provider is integrated and does not execute OCR. DOCX page
-numbers are not available from the document structure, so extraction includes
-paragraph references without inventing page numbers. Delete removes the
-private file and soft-deletes metadata to preserve audit foreign keys. If
-physical cleanup fails, the API reports that cleanup is pending while leaving
-the metadata soft-deleted.
+Uploads accept PDF and DOCX only. When `OCR_ENABLED=true` and the local
+`tesseract` executable is installed, low-text PDF pages are rasterized and
+processed with the English (`eng`) Tesseract language data. OCR is bounded to
+100 pages per document and 20 seconds per page. Missing Tesseract, timeouts,
+and failures are reported as processing warnings; OCR text may be inaccurate
+and must be checked against the original. OCR is off by default and is not
+bundled with the Python application. DOCX page numbers are not available from
+the document structure, so extraction includes paragraph references without
+inventing page numbers. Delete removes the private file and soft-deletes
+metadata to preserve audit foreign keys. If physical cleanup fails, the API
+reports that cleanup is pending while leaving the metadata soft-deleted.
 
 An authenticated legal-question endpoint provides preliminary,
 evidence-grounded AI answers when eligible legal sources and an LLM provider
@@ -614,7 +639,9 @@ and an LLM provider. It extracts candidate English-language paragraphs for
 duration, compensation, working hours, leave, probation, termination, notice,
 confidentiality, and signatures. It preserves extracted wording and available
 page/paragraph references. Keyword extraction is a candidate finder, not proof
-that all clauses were found; OCR is not implemented by this analysis module.
+that all clauses were found. If locally configured, the shared document
+extraction path can use Tesseract for scanned PDF pages; OCR output is
+fallible and is included with processing warnings.
 
 AI analysis is disabled unless explicitly configured. To use an approved
 OpenAI-compatible provider, set these values privately in `backend/.env` or a

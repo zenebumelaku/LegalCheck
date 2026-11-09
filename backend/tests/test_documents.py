@@ -1,11 +1,13 @@
 from io import BytesIO
 from pathlib import Path
+import stat
+import subprocess
+from types import SimpleNamespace
 from typing import Generator
 from uuid import UUID
 
 import fitz
 import pytest
-import stat
 from docx import Document as DocxDocument
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -158,6 +160,7 @@ def test_scan_like_pdf_returns_ocr_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "ocr_enabled", True)
+    monkeypatch.setattr("app.services.document_extraction.shutil.which", lambda _: None)
     _, token = _register_and_token(document_client, "scan@example.com")
 
     response = _upload(
@@ -171,7 +174,71 @@ def test_scan_like_pdf_returns_ocr_warning(
     assert response.status_code == 201
     assert response.json()["processing_status"] == "warning"
     assert any("scanned" in warning.lower() for warning in response.json()["warnings"])
-    assert any("no OCR provider is integrated" in warning for warning in response.json()["warnings"])
+    assert any("Tesseract executable is unavailable" in warning for warning in response.json()["warnings"])
+
+
+def test_scan_like_pdf_uses_configured_local_ocr(
+    document_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "ocr_enabled", True)
+    monkeypatch.setattr(
+        "app.services.document_extraction.shutil.which",
+        lambda _: "/usr/bin/tesseract",
+    )
+    monkeypatch.setattr(
+        "app.services.document_extraction.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=b"Recognized text from the scanned page.",
+        ),
+    )
+    _, token = _register_and_token(document_client, "scan-ocr@example.com")
+
+    response = _upload(
+        document_client,
+        token,
+        "scan.pdf",
+        _pdf_bytes(text=""),
+        "application/pdf",
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["processing_status"] == "completed"
+    assert body["pages"][0]["paragraphs"][0]["text"] == (
+        "Recognized text from the scanned page."
+    )
+    assert body["warnings"] == []
+
+
+def test_scan_like_pdf_reports_ocr_timeout(
+    document_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "ocr_enabled", True)
+    monkeypatch.setattr(
+        "app.services.document_extraction.shutil.which",
+        lambda _: "/usr/bin/tesseract",
+    )
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr("app.services.document_extraction.subprocess.run", timeout)
+    _, token = _register_and_token(document_client, "scan-timeout@example.com")
+
+    response = _upload(
+        document_client,
+        token,
+        "scan.pdf",
+        _pdf_bytes(text=""),
+        "application/pdf",
+    )
+
+    assert response.status_code == 201
+    assert response.json()["processing_status"] == "warning"
+    assert any("OCR could not process" in warning for warning in response.json()["warnings"])
 
 
 def test_upload_rejects_unsupported_extension(document_client: TestClient) -> None:

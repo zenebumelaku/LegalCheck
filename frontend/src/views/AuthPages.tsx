@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Eye, EyeOff, Lock, Mail, Building, User as UserIcon, ShieldCheck, ArrowRight, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { AuthService } from '../services/auth.service';
 import { User } from '../types';
@@ -332,21 +332,67 @@ export function RegisterPage({ onNavigate, onAuthSuccess }: AuthPageProps) {
   );
 }
 
-export function ForgotPasswordPage({ onNavigate }: { onNavigate: (path: string) => void }) {
+export function ForgotPasswordPage({
+  onNavigate,
+  resetToken
+}: {
+  onNavigate: (path: string) => void;
+  resetToken?: string;
+}) {
   const [email, setEmail] = useState('');
+  const [token, setToken] = useState(resetToken ?? '');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [resetComplete, setResetComplete] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  useEffect(() => {
+    if (!resetToken) return;
+    setToken(resetToken);
+    const url = new URL(window.location.href);
+    url.hash = '';
+    window.history.replaceState(
+      window.history.state,
+      document.title,
+      `${url.pathname}${url.search}${url.hash}`
+    );
+  }, [resetToken]);
+
+  const handleRequestSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) return;
 
+    setErrorMessage(null);
+    setSuccessMessage(null);
     setIsLoading(true);
     try {
       const res = await AuthService.requestPasswordReset(email);
       setSuccessMessage(res.message);
-    } catch {
-      setSuccessMessage(`If ${email} is registered, password recovery instructions have been sent.`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'The password reset request failed.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleConfirmSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    if (password !== confirmPassword) {
+      setErrorMessage('The passwords do not match.');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const result = await AuthService.confirmPasswordReset(token, password);
+      setSuccessMessage(result.message);
+      setResetComplete(true);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'The password could not be reset.');
     } finally {
       setIsLoading(false);
     }
@@ -360,19 +406,29 @@ export function ForgotPasswordPage({ onNavigate }: { onNavigate: (path: string) 
             <Lock className="w-5 h-5 text-slate-700" />
           </div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900">
-            Reset Password
+            {token ? 'Choose a New Password' : 'Reset Password'}
           </h1>
           <p className="mt-1.5 text-xs text-slate-500">
-            Enter your business email to receive secure recovery verification.
+            {token
+              ? 'Enter a new password to complete the reset.'
+              : 'Enter your business email to request a secure reset link.'}
           </p>
         </div>
 
-        {successMessage ? (
+        {errorMessage && (
+          <div
+            role="alert"
+            className="mb-5 p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs flex items-center gap-2"
+          >
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
+        {resetComplete || (!token && successMessage) ? (
           <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-center space-y-3">
             <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
-            <p className="text-xs text-emerald-900 leading-relaxed font-medium">
-              {successMessage}
-            </p>
+            <p className="text-xs text-emerald-900 leading-relaxed font-medium">{successMessage}</p>
             <button
               onClick={() => onNavigate('/login')}
               className="mt-2 text-xs font-bold text-slate-900 hover:underline block mx-auto"
@@ -380,8 +436,50 @@ export function ForgotPasswordPage({ onNavigate }: { onNavigate: (path: string) 
               Return to Sign In
             </button>
           </div>
+        ) : token ? (
+          <form onSubmit={handleConfirmSubmit} className="space-y-4">
+            <div>
+              <label htmlFor="new-password" className="block text-xs font-semibold text-slate-700 mb-1.5">
+                New password
+              </label>
+              <input
+                id="new-password"
+                type="password"
+                required
+                minLength={12}
+                maxLength={128}
+                autoComplete="new-password"
+                value={password}
+                onChange={event => setPassword(event.target.value)}
+                className="w-full px-3 py-2.5 text-xs rounded-lg border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+              />
+            </div>
+            <div>
+              <label htmlFor="confirm-password" className="block text-xs font-semibold text-slate-700 mb-1.5">
+                Confirm new password
+              </label>
+              <input
+                id="confirm-password"
+                type="password"
+                required
+                minLength={12}
+                maxLength={128}
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={event => setConfirmPassword(event.target.value)}
+                className="w-full px-3 py-2.5 text-xs rounded-lg border border-slate-300 text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 rounded-lg shadow-xs transition-colors flex items-center justify-center gap-2 mt-4"
+            >
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Update Password</span>}
+            </button>
+          </form>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleRequestSubmit} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                 Registered Corporate Email
@@ -413,6 +511,12 @@ export function ForgotPasswordPage({ onNavigate }: { onNavigate: (path: string) 
                 <span>Request Recovery Instructions</span>
               )}
             </button>
+
+            {successMessage && (
+              <p role="status" className="text-xs text-emerald-800 leading-relaxed">
+                {successMessage}
+              </p>
+            )}
 
             <div className="text-center pt-4">
               <button

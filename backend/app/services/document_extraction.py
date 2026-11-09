@@ -1,5 +1,9 @@
 from dataclasses import dataclass
 from io import BytesIO
+import logging
+import math
+import shutil
+import subprocess
 from typing import Iterator, List, Optional, Protocol, Union
 from zipfile import BadZipFile, ZipFile
 import zlib
@@ -13,6 +17,11 @@ from lxml.etree import XMLSyntaxError
 import defusedxml.ElementTree as _defused_et  # noqa: F401 – activates defusedxml protections
 
 MAX_EXTRACTED_CHARACTERS = 2_000_000
+OCR_MAX_PAGES = 100
+OCR_PAGE_TIMEOUT_SECONDS = 20
+OCR_DPI = 160
+OCR_MAX_PIXELS = 12_000_000
+logger = logging.getLogger(__name__)
 
 
 class _BlockContainer(Protocol):
@@ -50,7 +59,26 @@ class ExtractionResult:
     extracted_characters: int
 
 
-def _extract_pdf(content: bytes) -> ExtractionResult:
+def _ocr_page(page: fitz.Page, executable: str) -> str:
+    page_area = max(page.rect.width * page.rect.height, 1)
+    scale = min(OCR_DPI / 72, math.sqrt(OCR_MAX_PIXELS / page_area))
+    pixmap = page.get_pixmap(
+        matrix=fitz.Matrix(scale, scale),
+        alpha=False,
+    )
+    result = subprocess.run(
+        [executable, "stdin", "stdout", "-l", "eng", "--psm", "3"],
+        input=pixmap.tobytes("png"),
+        capture_output=True,
+        check=False,
+        timeout=OCR_PAGE_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("The OCR process failed.")
+    return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _extract_pdf(content: bytes, ocr_enabled: bool = False) -> ExtractionResult:
     try:
         document = fitz.open(stream=content, filetype="pdf")
     except (fitz.FileDataError, RuntimeError, ValueError) as exc:
@@ -66,6 +94,13 @@ def _extract_pdf(content: bytes) -> ExtractionResult:
 
         pages: List[ExtractedPage] = []
         total_characters = 0
+        warnings: list[str] = []
+        ocr_executable = shutil.which("tesseract") if ocr_enabled else None
+        ocr_unavailable_warning_added = False
+        ocr_attempts = 0
+        ocr_failures = 0
+        ocr_empty_pages = 0
+        ocr_page_limit_reached = False
         for page_index, page in enumerate(document, start=1):
             try:
                 blocks = page.get_text("blocks", sort=True)
@@ -88,13 +123,74 @@ def _extract_pdf(content: bytes) -> ExtractionResult:
                         raise UnsupportedDocumentError(
                             "The extracted PDF text exceeds safe processing limits."
                         )
+            page_text_characters = sum(len(paragraph.text) for paragraph in paragraphs)
+            if ocr_enabled and page_text_characters < 20:
+                if ocr_executable is None:
+                    if not ocr_unavailable_warning_added:
+                        warnings.append(
+                            "OCR is enabled, but the Tesseract executable is "
+                            "unavailable; scanned pages were not recognized."
+                        )
+                        ocr_unavailable_warning_added = True
+                elif not ocr_page_limit_reached:
+                    if ocr_attempts >= OCR_MAX_PAGES:
+                        ocr_page_limit_reached = True
+                        warnings.append(
+                            f"OCR stopped after {OCR_MAX_PAGES} scanned pages; "
+                            "remaining pages may have no extractable text."
+                        )
+                    else:
+                        ocr_attempts += 1
+                        try:
+                            recognized_text = _ocr_page(page, ocr_executable)
+                        except (
+                            OSError,
+                            RuntimeError,
+                            ValueError,
+                            subprocess.TimeoutExpired,
+                        ) as exc:
+                            ocr_failures += 1
+                            logger.warning(
+                                "OCR failed for PDF page %s",
+                                page_index,
+                                extra={"error_type": type(exc).__name__},
+                            )
+                        else:
+                            if recognized_text:
+                                next_paragraph_number = (
+                                    paragraphs[-1].paragraph_number + 1
+                                    if paragraphs
+                                    else 1
+                                )
+                                paragraphs.append(
+                                    ExtractedParagraph(
+                                        paragraph_number=next_paragraph_number,
+                                        text=recognized_text,
+                                    )
+                                )
+                                total_characters += len(recognized_text)
+                                if total_characters > MAX_EXTRACTED_CHARACTERS:
+                                    raise UnsupportedDocumentError(
+                                        "The extracted PDF text exceeds safe processing limits."
+                                    )
+                            else:
+                                ocr_empty_pages += 1
             pages.append(ExtractedPage(page_number=page_index, paragraphs=paragraphs))
 
-        warnings = (
-            ["This PDF appears to be scanned or contains very little extractable text."]
-            if total_characters < 20
-            else []
-        )
+        if total_characters < 20:
+            warnings.append(
+                "This PDF appears to be scanned or contains very little extractable text."
+            )
+        if not ocr_enabled and total_characters < 20:
+            warnings.append("OCR is not enabled.")
+        if ocr_failures:
+            warnings.append(
+                f"OCR could not process {ocr_failures} page(s); extracted text may be incomplete."
+            )
+        if ocr_empty_pages:
+            warnings.append(
+                f"OCR returned no text for {ocr_empty_pages} page(s); those pages may be blank or unreadable."
+            )
         return ExtractionResult(
             pages=pages,
             warnings=warnings,
@@ -180,21 +276,7 @@ def extract_document(
     ocr_enabled: bool = False,
 ) -> ExtractionResult:
     if document_type == "pdf":
-        result = _extract_pdf(content)
-        if result.warnings:
-            if ocr_enabled:
-                warning = (
-                    "OCR is enabled in configuration, but no OCR provider is "
-                    "integrated in this deployment."
-                )
-            else:
-                warning = "OCR is not enabled."
-            return ExtractionResult(
-                pages=result.pages,
-                warnings=[*result.warnings, warning],
-                extracted_characters=result.extracted_characters,
-            )
-        return result
+        return _extract_pdf(content, ocr_enabled)
     if document_type == "docx":
         return _extract_docx(content, max_docx_uncompressed_bytes)
     raise UnsupportedDocumentError("Only PDF and DOCX files are supported.")
