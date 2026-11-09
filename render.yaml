@@ -23,8 +23,6 @@ services:
         value: "3600"
       - key: CORS_ORIGINS
         sync: false
-      - key: SECRET_KEY
-        generateValue: true
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "60"
       - key: MAX_UPLOAD_SIZE_MB
@@ -101,10 +99,11 @@ services:
       mountPath: /var/data/private-documents
       sizeGB: 1
 
+  - type: redis
+    name: legalcheck-redis
+    plan: free
+
 databases:
   - name: legalcheck-db
     databaseName: legalcheck
-    plan: free
-
-  - name: legalcheck-redis
     plan: free

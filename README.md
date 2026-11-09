@@ -8,7 +8,16 @@ and structured JSON logs.
 ## Requirements
 
 - Python 3.11 or newer
-- PostgreSQL for the readiness check
+- PostgreSQL with pgvector for the application database and semantic retrieval
+- Redis for rate limiting, the audit job queue, and optional answer caching
+- Node.js/npm only when building or running the React frontend
+
+The API and database are required for normal application use. Redis is required
+for protected rate-limited operations and queued contract audits: rate limiting
+fails closed if Redis is unavailable. Run the audit worker to process queued
+audits; without it, queued audits will not be processed. Embeddings and LLM
+generation are optional integrations, but an answerable legal Q&A request
+requires eligible indexed legal sources and an available configured LLM provider.
 
 ## Set up the backend
 
@@ -35,6 +44,17 @@ replace the placeholder credentials with a local database role and password.
 `["http://localhost:3000"]`. Do not commit `.env` or put real credentials in
 `.env.example`.
 
+The database URL must point to PostgreSQL. The legal retrieval migrations use
+pgvector; make sure the extension is available and the migration role has the
+required permissions. Configure database, Redis, LLM, and embedding credentials
+only in an ignored local `.env` file or a deployment secret manager. The
+application does not read `SECRET_KEY`; do not rely on it as an application
+security setting.
+
+Start Redis separately, for example with `redis-server`. `REDIS_URL` must point
+to the same Redis service for the API and worker. Do not reuse development
+database or Redis URLs in production.
+
 ## Run the application
 
 With the virtual environment activated and the shell in `backend/`:
@@ -46,6 +66,105 @@ uvicorn app.main:app --reload
 The interactive API documentation is available at
 `http://127.0.0.1:8000/docs`.
 
+Run the separate audit worker in another terminal, with the same backend
+environment and dependencies:
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m app.workers.audit_worker
+```
+
+The API enqueues contract audits; the RQ worker consumes them. Legal Q&A is
+served directly by the API and does not use this audit queue.
+
+For the frontend, configure `VITE_API_BASE_URL` in your local
+`frontend/.env`, then run:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+The frontend does not contain provider credentials. Keep
+`VITE_ENABLE_DEMO_FALLBACK=false` except when intentionally testing the visibly
+labeled synthetic demo behavior.
+
+## Environment and providers
+
+`backend/.env.example` lists supported backend settings; copy it to `.env` and
+replace local connection placeholders. `DATABASE_URL` and `REDIS_URL` are
+service connection strings. `CORS_ORIGINS` is a JSON array of exact frontend
+origins.
+
+LLM generation is disabled by default. To enable it, configure
+`LLM_PROVIDER=openai_compatible` or `LLM_PROVIDER=ollama`, plus the provider's
+`LLM_API_URL`, `LLM_MODEL_NAME`, and optional `LLM_API_KEY` as appropriate.
+Ollama requires a separately installed/running server and available model.
+Remote endpoints must follow the application's HTTPS rules; unauthenticated
+HTTP is limited to loopback development endpoints. If the provider is disabled,
+missing, rate-limited, or unavailable, legal Q&A returns a clear error; it
+never substitutes a sample answer. No paid provider is bundled or required for
+startup.
+
+Embeddings are independently optional. `EMBEDDING_PROVIDER=disabled` uses
+non-semantic retrieval only. Configure the supported OpenAI-compatible
+embedding endpoint, or explicitly install and provision the optional local
+Sentence Transformers model as described in
+[Legal retrieval and embeddings](#legal-retrieval-and-embeddings). The local
+model is not downloaded during ordinary startup or tests. Embedding model
+versions must remain compatible with the database's 384-dimensional vectors;
+re-index when intentionally changing the model version.
+
+## Answer cache configuration
+
+The answer cache uses the same `REDIS_URL` as queues/rate limits, but stores
+legal Q&A responses under a separate key namespace.
+`LEGAL_QA_CACHE_TTL_SECONDS` defaults to 3600 seconds; setting it to `0`
+disables answer caching without disabling Redis-backed rate limiting or audit
+queues. `LEGAL_QA_CACHE_VERSION` defaults to `v1`; increment it to make old
+answer keys unreachable after answer-logic or configuration changes not already
+included in the key. Legal-source/provision/index changes update the knowledge
+base fingerprint automatically. Old versioned entries expire by TTL and are
+not physically deleted at invalidation time.
+
+Redis cache read/write failures are fail-open for Q&A: the request continues to
+retrieval and generation and does not return a fabricated answer. This is
+separate from rate limiting, which fails closed when Redis is unavailable.
+
+## Deployment configuration
+
+The repository's existing [`render.yaml`](./render.yaml) describes a Render
+web API, a separate audit worker, PostgreSQL, and a Redis-compatible service.
+It is a hosting blueprint, not a deployment verification: it has not been
+deployed or tested against a Render account. It runs migrations in the API
+build command and starts the API and worker with their respective commands.
+The frontend is not deployed by that blueprint and needs a separate static
+frontend deployment with `VITE_API_BASE_URL` pointing to the API.
+
+The blueprint sets both LLM and embedding providers to `disabled`. API startup
+can succeed in that state, but answer generation returns an explicit
+unavailable-provider error, and audit analysis cannot produce AI findings.
+Configure supported providers using the hosting platform's secret/environment
+settings before relying on those features. Confirm PostgreSQL pgvector
+availability and migration permissions for the selected database plan.
+
+The blueprint configures local private-file storage. [Render persistent
+disks](https://render.com/docs/disks) attach to a specific service; the API's
+disk is not shared with the worker's disk even if their names and
+`PRIVATE_STORAGE_PATH` values match. Contract
+audits require the worker to access the exact private files uploaded by the
+API. Replace local storage with an approved shared private object store, or
+otherwise provide a verified shared-storage implementation, before using
+multi-service audits. Do not treat the current local-storage blueprint as
+production-ready for contract files.
+
+This repository intentionally has no Docker Compose setup. For local
+development, start PostgreSQL with pgvector and Redis using the host's supported
+installation, then follow the migration/API/worker commands above. No
+credentials or local provider secrets belong in checked-in example files.
+
 ## Database migrations
 
 With PostgreSQL running and `DATABASE_URL` set in `.env`, from `backend/`:
@@ -54,8 +173,8 @@ With PostgreSQL running and `DATABASE_URL` set in `.env`, from `backend/`:
 alembic upgrade head
 ```
 
-Apply this migration before starting the API so the `auth_sessions` table and
-case-insensitive email index exist.
+Apply migrations before starting the API so the full application schema,
+including the `auth_sessions` table and case-insensitive email index, exists.
 
 Create future migrations after changing the models with:
 
@@ -324,6 +443,12 @@ pending, unknown-status, and otherwise ineligible records are not promoted to
 authoritative answers. Ingestion stores the submitted metadata and provisions;
 it does not establish that the submitted article boundaries or legal status
 are correct.
+
+No verified Ethiopian legal corpus is bundled with this repository. An empty
+registry, synthetic test fixture, or successful integration test is not
+evidence that real Ethiopian law has been indexed or verified. Populate
+production sources only through the existing provenance and independent-review
+workflow.
 
 Provisions remain intact when they fit the configured chunk window;
 long provisions are split on paragraph/sentence boundaries with overlap and
