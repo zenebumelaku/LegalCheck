@@ -22,6 +22,7 @@ import { NewAuditPage } from './views/NewAuditPage';
 import { AuditHistoryPage } from './views/AuditHistoryPage';
 import { AuditDetailPage } from './views/AuditDetailPage';
 import { LegalSourcesPage } from './views/LegalSourcesPage';
+import { LegalChatPage } from './views/LegalChatPage';
 import { SettingsPage, ProfilePage } from './views/SettingsPages';
 
 export default function App() {
@@ -58,6 +59,7 @@ export default function App() {
   const isDashboardView =
     path.startsWith('/dashboard') ||
     path.startsWith('/audits') ||
+    path === '/legal-chat' ||
     path.startsWith('/settings') ||
     path.startsWith('/profile');
 
@@ -118,6 +120,13 @@ export default function App() {
               )}
               {path === '/audits/new' && <NewAuditPage onNavigate={navigate} />}
               {path === '/audits' && <AuditHistoryPage onNavigate={navigate} />}
+              {path === '/legal-chat' && (
+                <LegalChatPage
+                  currentUser={currentUser}
+                  isAuthChecking={isAuthChecking}
+                  onNavigate={navigate}
+                />
+              )}
               {auditDetailMatch && (
                 <AuditDetailPage auditId={auditDetailMatch[1]} onNavigate={navigate} />
               )}

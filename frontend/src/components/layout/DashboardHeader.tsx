@@ -23,6 +23,7 @@ export function DashboardHeader({
     if (currentPath.startsWith('/audits/')) return ['Audits', 'Audit Results'];
     if (currentPath === '/legal-sources') return ['Legal Library', 'Proclamations'];
     if (currentPath.startsWith('/legal-sources/')) return ['Legal Library', 'Source Details'];
+    if (currentPath === '/legal-chat') return ['Legal AI', 'Chat'];
     if (currentPath === '/settings') return ['Configuration', 'Settings'];
     if (currentPath === '/profile') return ['Account', 'User Profile'];
     return ['Dashboard'];
@@ -59,7 +60,7 @@ export function DashboardHeader({
       <div className="flex items-center gap-3 shrink-0">
         <div className="hidden sm:flex items-center gap-1.5 text-xs text-slate-500 border border-slate-200 px-2.5 py-1 rounded-md bg-slate-50">
           <Shield className="w-3.5 h-3.5 text-emerald-600" />
-          <span className="font-medium text-slate-700">{currentUser?.organization || 'Addis Tech Solutions PLC'}</span>
+          <span className="font-medium text-slate-700">{currentUser?.organization || 'No organization'}</span>
         </div>
 
         {currentPath !== '/audits/new' && (

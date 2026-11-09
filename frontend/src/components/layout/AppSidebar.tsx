@@ -7,9 +7,9 @@ import {
   Settings,
   User as UserIcon,
   LogOut,
-  ShieldCheck,
   ChevronRight,
-  Scale
+  Scale,
+  MessageSquareText
 } from 'lucide-react';
 import { User } from '../../types';
 
@@ -48,6 +48,11 @@ export function AppSidebar({
       label: 'Legal Sources',
       path: '/legal-sources',
       icon: BookOpen
+    },
+    {
+      label: 'Legal AI Chat',
+      path: '/legal-chat',
+      icon: MessageSquareText
     },
     {
       label: 'Settings',
@@ -110,21 +115,20 @@ export function AppSidebar({
         })}
       </div>
 
-      {/* Jurisdiction Tag & Legal Scope */}
+      {/* Legal source availability */}
       <div className="p-3 mx-3 mb-3 rounded-lg bg-slate-800/60 border border-slate-800 text-[11px] text-slate-400">
-        <div className="font-semibold text-slate-300 mb-1">Labour Law Scope</div>
-        <div>FDRE Proc. No. 1156/2019</div>
-        <div className="text-[10px] text-emerald-400 mt-0.5">Verified Articles & Annotations</div>
+        <div className="font-semibold text-slate-300 mb-1">Legal sources</div>
+        <div>Availability depends on reviewed backend records.</div>
       </div>
 
       {/* Current User & Logout */}
       <div className="p-3 border-t border-slate-800">
         <div className="p-2 rounded-lg bg-slate-800/40 border border-slate-800/60 mb-2">
           <div className="text-xs font-semibold text-slate-200 truncate">
-            {currentUser?.fullName || 'Tewodros Kassahun'}
+            {currentUser?.fullName || 'Not signed in'}
           </div>
           <div className="text-[11px] text-slate-400 truncate">
-            {currentUser?.organization || 'Addis Tech Solutions PLC'}
+            {currentUser?.organization || 'No organization'}
           </div>
         </div>
 

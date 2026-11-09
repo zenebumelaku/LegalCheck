@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx src/tests/compliance-engine.test.ts"
+    "test": "tsx src/tests/compliance-engine.test.ts && tsx src/tests/legal-question.service.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
