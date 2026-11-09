@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from typing import Optional
 from uuid import UUID
 
@@ -15,6 +16,16 @@ from app.services.embeddings import (
 from app.services.legal_chunking import chunk_legal_provision
 
 EMBEDDING_BATCH_SIZE = 32
+logger = logging.getLogger(__name__)
+
+
+class LegalEmbeddingIndexingError(RuntimeError):
+    def __init__(self, source_id: UUID, reason: str) -> None:
+        self.source_id = source_id
+        super().__init__(
+            f"Embedding indexing failed for legal source {source_id} "
+            f"({reason}); no new chunk changes were committed for this attempt."
+        )
 
 
 def generate_embeddings_for_source(
@@ -64,6 +75,15 @@ def generate_embeddings_for_source(
                         "Chunk content changed for an existing model version; "
                         "create a new legal source version or embedding version."
                     )
+                if (
+                    existing.chunk_text != chunk.text
+                    or existing.page_number != chunk.page_number
+                    or existing.source_version_label != chunk.version_label
+                ):
+                    raise ValueError(
+                        "Stored chunk metadata no longer matches the source; "
+                        "create a new legal source or embedding version."
+                    )
                 if existing.embedding is not None:
                     continue
                 row = existing
@@ -82,14 +102,29 @@ def generate_embeddings_for_source(
 
     for start in range(0, len(missing), batch_size):
         batch = missing[start : start + batch_size]
-        vectors = provider.embed([text for _, text in batch])
-        if len(vectors) != len(batch):
-            raise ValueError("Embedding provider returned an unexpected vector count.")
-        for (row, _), vector in zip(batch, vectors):
-            row.embedding = validate_embedding(
-                vector,
-                expected_dimensions=provider.dimensions,
+        try:
+            vectors = provider.embed([text for _, text in batch])
+            if len(vectors) != len(batch):
+                raise ValueError(
+                    "Embedding provider returned an unexpected vector count."
+                )
+            validated_vectors = [
+                validate_embedding(vector, expected_dimensions=provider.dimensions)
+                for vector in vectors
+            ]
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "Embedding provider failed for legal source %s",
+                source.id,
+                extra={"error_type": type(exc).__name__},
             )
+            raise LegalEmbeddingIndexingError(
+                source.id,
+                type(exc).__name__,
+            ) from exc
+        for (row, _), vector in zip(batch, validated_vectors):
+            row.embedding = vector
             db.add(row)
 
     try:
@@ -98,10 +133,12 @@ def generate_embeddings_for_source(
         db.rollback()
         raise
     return StoredEmbeddingInfo(
+        source_id=source.id,
         model=provider.model_name,
         version=provider.model_version,
         dimensions=EMBEDDING_DIMENSIONS,
         chunks_created=len(missing),
+        status="indexed" if missing else "unchanged",
     )
 
 
@@ -120,12 +157,28 @@ def generate_embeddings_for_verified_sources(
     sources = db.scalars(query.order_by(LegalSource.created_at)).unique().all()
     if source_id is not None and not sources:
         raise LookupError("No verified legal source matched the requested ID.")
-    return [
-        generate_embeddings_for_source(
-            db,
-            source,
-            provider,
-            batch_size=batch_size,
-        )
-        for source in sources
-    ]
+    results = []
+    for source in sources:
+        try:
+            results.append(
+                generate_embeddings_for_source(
+                    db,
+                    source,
+                    provider,
+                    batch_size=batch_size,
+                )
+            )
+        except LegalEmbeddingIndexingError:
+            raise
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "Embedding indexing failed for legal source %s",
+                source.id,
+                extra={"error_type": type(exc).__name__},
+            )
+            raise LegalEmbeddingIndexingError(
+                source.id,
+                type(exc).__name__,
+            ) from exc
+    return results

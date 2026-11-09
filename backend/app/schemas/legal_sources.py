@@ -9,6 +9,7 @@ from pydantic import (
     Field,
     computed_field,
     field_validator,
+    model_validator,
 )
 
 
@@ -44,6 +45,16 @@ class LegalSourceIngestionMetadata(BaseModel):
         if not normalized:
             raise ValueError("This value must not be blank.")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_effective_date_range(self) -> "LegalSourceIngestionMetadata":
+        if (
+            self.effective_date is not None
+            and self.end_date is not None
+            and self.end_date < self.effective_date
+        ):
+            raise ValueError("end_date must not precede effective_date.")
+        return self
 
 
 class LegalProvisionIngestion(BaseModel):
@@ -122,6 +133,7 @@ class LegalSourceResponse(BaseModel):
         return (
             self.verification_status == "verified"
             and self.legal_status == "current"
+            and self.effective_date is not None
             and self.file_checksum is not None
             and self.source_file_storage_key is not None
             and self.verified_by is not None

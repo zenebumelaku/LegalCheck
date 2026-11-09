@@ -5,7 +5,10 @@ from uuid import UUID
 
 from app.db.session import get_session_factory
 from app.services.embeddings import EmbeddingProviderConfigurationError, get_embedding_provider
-from app.services.legal_embedding_index import generate_embeddings_for_verified_sources
+from app.services.legal_embedding_index import (
+    LegalEmbeddingIndexingError,
+    generate_embeddings_for_verified_sources,
+)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -33,17 +36,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error(str(exc))
     if provider is None:
         parser.error(
-            "Set EMBEDDING_PROVIDER=openai_compatible and configure "
-            "EMBEDDING_API_URL before generating production embeddings."
+            "Configure EMBEDDING_PROVIDER=openai_compatible with "
+            "EMBEDDING_API_URL, or provision a local model and configure "
+            "EMBEDDING_PROVIDER=sentence_transformers with "
+            "EMBEDDING_LOCAL_MODEL_PATH."
         )
 
-    with get_session_factory()() as db:
-        results = generate_embeddings_for_verified_sources(
-            db,
-            provider,
-            source_id=arguments.source_id,
-            batch_size=arguments.batch_size,
-        )
+    try:
+        with get_session_factory()() as db:
+            results = generate_embeddings_for_verified_sources(
+                db,
+                provider,
+                source_id=arguments.source_id,
+                batch_size=arguments.batch_size,
+            )
+    except LegalEmbeddingIndexingError as exc:
+        parser.exit(status=1, message=f"{exc}\n")
     print(
         json.dumps(
             [result.model_dump(mode="json") for result in results],

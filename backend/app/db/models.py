@@ -260,6 +260,7 @@ class LegalSource(Base):
         return (
             self.verification_status == "verified"
             and self.legal_status == "current"
+            and self.effective_date is not None
             and self.file_checksum is not None
             and self.source_file_storage_key is not None
             and self.verified_by is not None
@@ -563,6 +564,7 @@ def require_verified_current_citation_source(
         select(
             LegalSource.verification_status,
             LegalSource.legal_status,
+            LegalSource.effective_date,
             LegalSource.file_checksum,
             LegalSource.source_file_storage_key,
             LegalSource.verified_by,
@@ -579,6 +581,7 @@ def require_verified_current_citation_source(
         source_status is None
         or source_status.verification_status != "verified"
         or source_status.legal_status != "current"
+        or source_status.effective_date is None
         or source_status.file_checksum is None
         or source_status.source_file_storage_key is None
         or source_status.verified_by is None

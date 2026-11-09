@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 from uuid import UUID
 
 import pytest
@@ -91,8 +91,13 @@ def _ingest(
     *,
     version_label: str = "fixture-v1",
     content: bytes = b"%PDF-1.7\nTest fixture PDF\n%%EOF",
+    metadata_overrides: Optional[dict] = None,
 ):
-    metadata = {**METADATA, "version_label": version_label}
+    metadata = {
+        **METADATA,
+        "version_label": version_label,
+        **(metadata_overrides or {}),
+    }
     return client.post(
         "/api/v1/legal-sources/ingest",
         headers={"Authorization": f"Bearer {token}"},
@@ -239,6 +244,94 @@ def test_changed_source_is_preserved_as_a_distinct_version(
     ]
     assert records[0].file_checksum != records[1].file_checksum
     assert db_session.scalar(select(func.count(LegalProvision.id))) == 2
+
+
+def test_duplicate_version_label_is_rejected_without_replacing_prior_version(
+    legal_client: TestClient,
+    db_session: Session,
+):
+    _, admin_token = _register_and_login(
+        legal_client,
+        db_session,
+        "duplicate-version-admin@example.com",
+        role="admin",
+    )
+    first = _ingest(legal_client, admin_token, version_label="fixture-v1")
+    conflict = _ingest(
+        legal_client,
+        admin_token,
+        version_label="fixture-v1",
+        content=b"%PDF-1.7\nDifferent contents for the same version label\n%%EOF",
+    )
+
+    assert first.status_code == 201
+    assert conflict.status_code == 409
+    assert db_session.scalar(select(func.count(LegalSource.id))) == 1
+    stored = db_session.scalar(select(LegalSource))
+    assert stored is not None
+    assert stored.version_label == "fixture-v1"
+    assert stored.file_checksum is not None
+
+
+def test_current_source_without_effective_date_is_not_eligible(
+    legal_client: TestClient,
+    db_session: Session,
+):
+    ingester, ingester_token = _register_and_login(
+        legal_client,
+        db_session,
+        "missing-effective-date-ingester@example.com",
+        role="admin",
+    )
+    _, reviewer_token = _register_and_login(
+        legal_client,
+        db_session,
+        "missing-effective-date-reviewer@example.com",
+        role="admin",
+    )
+    ingested = _ingest(
+        legal_client,
+        ingester_token,
+        metadata_overrides={"effective_date": None},
+    )
+    source_id = ingested.json()["source"]["id"]
+
+    verified = legal_client.post(
+        f"/api/v1/legal-sources/{source_id}/verify",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+        json={
+            "decision": "verified",
+            "legal_status": "current",
+            "verification_notes": "Fixture review leaves effective date unknown.",
+        },
+    )
+
+    assert ingested.status_code == 201
+    assert verified.status_code == 200
+    assert verified.json()["verification_status"] == "verified"
+    assert verified.json()["legal_status"] == "current"
+    assert verified.json()["effective_date"] is None
+    assert verified.json()["eligible_for_findings"] is False
+
+
+def test_ingestion_rejects_end_date_before_effective_date(
+    legal_client: TestClient,
+    db_session: Session,
+):
+    _, admin_token = _register_and_login(
+        legal_client,
+        db_session,
+        "invalid-date-range-admin@example.com",
+        role="admin",
+    )
+    response = _ingest(
+        legal_client,
+        admin_token,
+        metadata_overrides={"end_date": "2020-01-31"},
+    )
+
+    assert response.status_code == 422
+    assert db_session.scalar(select(func.count(LegalSource.id))) == 0
 
 
 def test_only_admin_can_ingest_or_verify_and_verification_requires_second_reviewer(

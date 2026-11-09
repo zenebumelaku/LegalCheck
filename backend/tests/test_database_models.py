@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -59,6 +59,7 @@ def test_audit_findings_citations_and_feedback_are_related(db_session: Session) 
         source_type="statute",
         jurisdiction="ET",
         language="en",
+        effective_date=date(2020, 1, 1),
         legal_status="current",
         verification_status="verified",
         verified_by=user.id,
@@ -276,6 +277,57 @@ def test_unverified_legal_source_cannot_be_used_as_finding_citation(
         legal_source=source,
         article_number="fixture",
         text="Fixture text",
+        language="en",
+    )
+    finding = Finding(
+        audit=audit,
+        finding_type="fixture",
+        severity="low",
+        clause_text="Fixture",
+        explanation="Fixture",
+    )
+    db_session.add(
+        FindingCitation(
+            finding=finding,
+            legal_provision=provision,
+        )
+    )
+
+    with pytest.raises(ValueError, match="verified source marked current"):
+        db_session.commit()
+
+
+def test_current_legal_source_without_effective_date_cannot_be_cited(
+    db_session: Session,
+) -> None:
+    user = make_user("Date Reviewer", "date-reviewer@example.test")
+    db_session.add(user)
+    db_session.flush()
+    document = Document(
+        owner=user,
+        original_filename="contract.pdf",
+        storage_key="documents/unknown-effective-date",
+        content_type="application/pdf",
+        file_size=10,
+    )
+    audit = Audit(document=document, requester=user)
+    source = LegalSource(
+        title="Synthetic source with unknown effective date",
+        source_type="test_fixture",
+        jurisdiction="test",
+        language="en",
+        legal_status="current",
+        verification_status="verified",
+        verified_by=user.id,
+        verified_at=datetime.now(timezone.utc),
+        original_source_url="https://example.test/synthetic-source.pdf",
+        file_checksum="c" * 64,
+        source_file_storage_key="synthetic-source.pdf",
+    )
+    provision = LegalProvision(
+        legal_source=source,
+        article_number="synthetic-article",
+        text="Synthetic fixture text only.",
         language="en",
     )
     finding = Finding(

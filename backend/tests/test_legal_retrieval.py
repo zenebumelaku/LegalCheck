@@ -19,7 +19,11 @@ from app.services.embeddings import (
     get_embedding_provider,
 )
 from app.services.legal_chunking import chunk_legal_provision
-from app.services.legal_embedding_index import generate_embeddings_for_source
+from app.services.legal_question_cache import legal_knowledge_base_version
+from app.services.legal_embedding_index import (
+    LegalEmbeddingIndexingError,
+    generate_embeddings_for_source,
+)
 from app.services.legal_retrieval import retrieve_legal_evidence
 
 
@@ -86,6 +90,7 @@ def _add_source(
     source.provisions = [
         LegalProvision(
             article_number=article,
+            sub_article_reference=f"sub-{article}",
             section_title=f"Synthetic heading {article}",
             text=text,
             page_number=4,
@@ -129,8 +134,12 @@ def test_chunking_preserves_article_version_page_and_exception_context(
     assert all(chunk.source_id == source.id for chunk in chunks)
     assert all(chunk.provision_id == provision.id for chunk in chunks)
     assert all(chunk.article_number == "fixture-article" for chunk in chunks)
+    assert all(chunk.sub_article_reference == "sub-fixture-article" for chunk in chunks)
+    assert all(chunk.heading == "Synthetic heading fixture-article" for chunk in chunks)
     assert all(chunk.version_label == "synthetic-v1" for chunk in chunks)
     assert all(chunk.page_number == 4 for chunk in chunks)
+    assert all("Sub-article sub-fixture-article" in chunk.text for chunk in chunks)
+    assert all("Synthetic heading fixture-article" in chunk.text for chunk in chunks)
     rule_and_exception = [
         chunk
         for chunk in chunks
@@ -149,8 +158,10 @@ def test_embedding_generation_is_provider_versioned_and_idempotent(
         provisions=[("fixture-article", "Synthetic fixture wage provision.")],
     )
     provider = SyntheticTestEmbeddingProvider()
+    initial_kb_version = legal_knowledge_base_version(db_session)
 
     first = generate_embeddings_for_source(db_session, source, provider)
+    indexed_kb_version = legal_knowledge_base_version(db_session)
     second = generate_embeddings_for_source(db_session, source, provider)
     second_model_version = SyntheticTestEmbeddingProvider()
     second_model_version.model_version = "fixture-v2"
@@ -166,14 +177,99 @@ def test_embedding_generation_is_provider_versioned_and_idempotent(
     ).all()
 
     assert first.chunks_created == 1
+    assert first.status == "indexed"
+    assert first.source_id == source.id
     assert second.chunks_created == 0
+    assert second.status == "unchanged"
     assert regenerated.chunks_created == 1
     assert {(row.embedding_model, row.embedding_version) for row in rows} == {
         ("synthetic-fixture-model", "fixture-v1"),
         ("synthetic-fixture-model", "fixture-v2"),
     }
     assert all(len(row.embedding) == EMBEDDING_DIMENSIONS for row in rows)
+    assert all(row.page_number == 4 for row in rows)
+    assert all(row.source_version_label == "synthetic-index-v1" for row in rows)
+    assert all("Article fixture-article" in row.chunk_text for row in rows)
+    assert all("Sub-article sub-fixture-article" in row.chunk_text for row in rows)
+    assert all(
+        "Synthetic heading fixture-article" in row.chunk_text
+        for row in rows
+    )
+    assert all(row.provision.legal_source_id == source.id for row in rows)
+    assert indexed_kb_version != initial_kb_version
     assert len(provider.calls) == 1
+
+
+def test_indexing_refuses_to_reuse_chunk_when_page_metadata_changed(
+    db_session: Session,
+) -> None:
+    source = _add_source(
+        db_session,
+        version="synthetic-page-metadata-v1",
+        provisions=[("fixture-article", "Synthetic fixture indexed text.")],
+    )
+    provider = SyntheticTestEmbeddingProvider()
+    generate_embeddings_for_source(db_session, source, provider)
+    provision = source.provisions[0]
+    provision.page_number = 5
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="Stored chunk metadata"):
+        generate_embeddings_for_source(db_session, source, provider)
+
+    chunk = db_session.scalar(
+        select(LegalProvisionChunk).where(
+            LegalProvisionChunk.provision_id == provision.id
+        )
+    )
+    assert chunk is not None
+    assert chunk.page_number == 4
+    assert len(provider.calls) == 1
+
+
+def test_provider_failure_does_not_commit_partial_embedding_chunks(
+    db_session: Session,
+) -> None:
+    source = _add_source(
+        db_session,
+        version="synthetic-provider-failure-v1",
+        provisions=[
+            ("fixture-article-1", "Synthetic first fixture provision."),
+            ("fixture-article-2", "Synthetic second fixture provision."),
+        ],
+    )
+
+    class FailingProvider(SyntheticTestEmbeddingProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.call_count = 0
+
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            self.call_count += 1
+            if self.call_count == 1:
+                return super().embed(texts)
+            raise RuntimeError("synthetic provider outage")
+
+    with pytest.raises(LegalEmbeddingIndexingError, match="no new chunk changes"):
+        generate_embeddings_for_source(
+            db_session,
+            source,
+            FailingProvider(),
+            batch_size=1,
+        )
+
+    assert db_session.scalars(
+        select(LegalProvisionChunk).where(
+            LegalProvisionChunk.provision_id.in_(
+                [provision.id for provision in source.provisions]
+            )
+        )
+    ).all() == []
+
+    recovery_provider = SyntheticTestEmbeddingProvider()
+    result = generate_embeddings_for_source(db_session, source, recovery_provider)
+    assert result.status == "indexed"
+    assert result.chunks_created == 2
 
 
 def test_embedding_reindex_refuses_silent_source_content_replacement(

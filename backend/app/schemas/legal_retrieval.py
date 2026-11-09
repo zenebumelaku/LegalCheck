@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -69,7 +69,9 @@ class LegalTextChunk(BaseModel):
 
 
 class StoredEmbeddingInfo(BaseModel):
+    source_id: UUID
     model: str
     version: str
     dimensions: int
     chunks_created: int
+    status: Literal["indexed", "unchanged"]

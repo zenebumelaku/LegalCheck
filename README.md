@@ -306,7 +306,26 @@ python -m app.scripts.generate_legal_embeddings --source-id <verified-source-uui
 
 The script indexes only sources with `verification_status=verified`. It
 preserves source version, article, sub-article, heading, and page references in
-chunks. Provisions remain intact when they fit the configured chunk window;
+chunks. Each result identifies its source and reports `indexed` or `unchanged`.
+If a provider fails for one source, that source's pending chunk writes are
+rolled back and the command exits with the source ID and failure type; other
+sources already completed in the same command remain committed. Re-running an
+unchanged model version does not re-embed completed chunks. If source text,
+article metadata, version, or page metadata no longer matches an existing
+chunk, indexing refuses to overwrite the previous indexed record; ingest a
+distinct legal-source version or choose a new embedding version.
+
+An ingested source remains pending until a different admin reviews it. A
+source is eligible for authoritative findings only when verified, explicitly
+marked current, supported by retained file provenance, and supplied with an
+effective date. An unknown effective date or legal status remains ineligible
+or applicability-uncertain; neither is inferred from PDF contents. Rejected,
+pending, unknown-status, and otherwise ineligible records are not promoted to
+authoritative answers. Ingestion stores the submitted metadata and provisions;
+it does not establish that the submitted article boundaries or legal status
+are correct.
+
+Provisions remain intact when they fit the configured chunk window;
 long provisions are split on paragraph/sentence boundaries with overlap and
 explicit common English exception/definition continuation markers. Chunk
 boundaries are not a legal interpretation: verify generated chunk text against

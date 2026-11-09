@@ -71,7 +71,7 @@ def ingest_legal_source(
             "That law number and version label are already registered."
         )
 
-    storage_key = f"legal-sources/{uuid.uuid4().hex}.pdf"
+    storage_key = f"legal-source-{uuid.uuid4().hex}.pdf"
     storage.store(storage_key, file_content)
     source = LegalSource(
         title=metadata.title,
