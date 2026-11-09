@@ -14,6 +14,8 @@ from app.core.rate_limit import RedisRateLimiter, get_rate_limiter
 from app.core.request_context import RequestContextMiddleware
 from app.main import app, unhandled_exception_handler
 
+pytestmark = pytest.mark.unit
+
 
 def _request(
     *,

@@ -34,6 +34,8 @@ from app.services.llm_provider import LLMProviderError
 from app.storage.interface import LocalPrivateFileStorage
 from app.workers.audit_worker import run_audit_job
 
+pytestmark = pytest.mark.unit
+
 
 class MockAnalyzer:
     model_name = "test-only-mock-analyzer"

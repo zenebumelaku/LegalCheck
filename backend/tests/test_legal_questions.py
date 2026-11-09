@@ -26,6 +26,8 @@ from app.services.legal_question_cache import (
 from app.services.llm_provider import LLMProviderError, LLMProviderRateLimitError
 import app.services.legal_question_answering as legal_question_answering
 
+pytestmark = pytest.mark.unit
+
 
 class MemoryAnswerCache:
     def __init__(self) -> None:

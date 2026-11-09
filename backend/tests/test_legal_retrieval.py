@@ -26,6 +26,8 @@ from app.services.legal_embedding_index import (
 )
 from app.services.legal_retrieval import retrieve_legal_evidence
 
+pytestmark = pytest.mark.unit
+
 
 class SyntheticTestEmbeddingProvider:
     """Explicitly synthetic vectors used only to test ranking behavior."""

@@ -11,6 +11,8 @@ from app.db.models import User
 from app.db.session import DatabaseConfigurationError, get_db
 from app.main import app
 
+pytestmark = pytest.mark.unit
+
 client = TestClient(app)
 
 

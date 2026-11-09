@@ -1,0 +1,25 @@
+{
+  "dataset_id": "legal-qa-retrieval-evaluation",
+  "schema_version": 1,
+  "status": "placeholder_no_verified_source_material",
+  "notice": "No verified legal source material or manually reviewed evaluation cases are included. This file is a schema placeholder, not a legal dataset.",
+  "case_schema": {
+    "case_id": "stable non-sensitive identifier",
+    "question": "reviewed evaluation question",
+    "review_context": "LegalReviewContext object",
+    "top_k": "integer from 1 to 100",
+    "expected_provisions": [
+      {
+        "source_id": "UUID from the verified legal-source registry",
+        "source_version": "exact stored source version label",
+        "provision_id": "UUID from that source version"
+      }
+    ],
+    "manual_review": {
+      "reviewer_qualification": "qualified legal reviewer role or credential",
+      "reviewed_at": "ISO-8601 timestamp",
+      "reference": "auditable review record identifier"
+    }
+  },
+  "cases": []
+}

@@ -14,6 +14,8 @@ from app.db.session import get_db
 from app.main import app
 from app.storage.interface import LocalPrivateFileStorage
 
+pytestmark = pytest.mark.unit
+
 METADATA = {
     "title": "Test Fixture Legal Source",
     "law_number": "TEST-FIXTURE-001",

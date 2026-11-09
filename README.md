@@ -426,12 +426,53 @@ example, `redis-server` in another terminal), then run from `backend/`:
 
 ```bash
 LEGAL_QA_REDIS_INTEGRATION=1 REDIS_URL=redis://localhost:6379/0 \
-  python -m pytest -q tests/integration/test_legal_question_cache_redis.py
+  python -m pytest -q -m redis_integration \
+  tests/integration/test_legal_question_cache_redis.py
 ```
 
-This opt-in integration test exercises Redis serialization, read/write, and
-expiry configuration for the cache component. It does not test a live LLM or
-claim that a verified Ethiopian legal corpus is indexed.
+The opt-in check includes a real cache-aside request flow: the first request
+misses and calls retrieval plus a test-only generation provider, the equivalent
+second request hits Redis and returns the same answer/citations without either
+call, and changing a source record changes the knowledge-base version and
+causes another miss. Its legal source and provider response are synthetic
+test-only fixtures; it verifies cache mechanics, not legal accuracy or a live
+LLM.
+
+## Q&A test and evaluation layers
+
+- **Unit/regression tests** use SQLite, mocks, or clearly labeled synthetic
+  records; they cover evidence eligibility, citation validation, source
+  versioning, cache ordering/isolation, conversation ownership, and audit/cache
+  separation. Run the focused suite from `backend/`:
+
+  ```bash
+  python -m pytest -q -m unit \
+    tests/test_legal_questions.py \
+    tests/test_legal_retrieval.py \
+    tests/test_legal_sources.py \
+    tests/test_audits.py \
+    tests/test_documents.py
+  ```
+
+- **External-service integration tests** are separately marked. The Redis
+  check above requires a real Redis server. PostgreSQL/pgvector evaluation
+  requires `LEGAL_QA_EVALUATION_DATABASE_URL` and an enabled pgvector extension.
+- **Legal evaluation** is in `backend/tests/evaluation/`. Its dataset is an
+  intentionally empty placeholder because no verified legal source material is
+  bundled or otherwise available in this repository. Run the harness after
+  adding independently verified and manually reviewed cases:
+
+  ```bash
+  cd backend
+  LEGAL_QA_EVALUATION_DATABASE_URL='postgresql+psycopg://…' \
+    python -m pytest -q -m 'legal_evaluation and postgres_integration' \
+    tests/evaluation
+  ```
+
+  Until then the harness skips; no legal evaluation score is reported.
+- **Manual legal review** is a separate required activity, described in
+  `backend/tests/evaluation/README.md`. Automated tests do not establish legal
+  correctness.
 
 Run its focused tests with:
 

@@ -24,6 +24,8 @@ from app.db.session import get_db
 from app.main import app
 from app.storage.interface import LocalPrivateFileStorage
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def document_client(
