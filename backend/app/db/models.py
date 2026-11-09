@@ -93,6 +93,11 @@ class User(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    legal_question_conversations: Mapped[List["LegalQuestionConversation"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class AuthSession(Base):
@@ -115,6 +120,113 @@ class AuthSession(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="auth_sessions")
+
+
+class LegalQuestionConversation(Base):
+    __tablename__ = "legal_question_conversations"
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(title)) > 0",
+            name="ck_legal_question_conversations_title_nonempty",
+        ),
+        Index(
+            "ix_legal_question_conversations_user_updated",
+            "user_id",
+            "updated_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    user: Mapped["User"] = relationship(back_populates="legal_question_conversations")
+    messages: Mapped[List["LegalQuestionMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="LegalQuestionMessage.turn_index, LegalQuestionMessage.role",
+    )
+
+
+class LegalQuestionMessage(Base):
+    __tablename__ = "legal_question_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('user', 'assistant')",
+            name="ck_legal_question_messages_role",
+        ),
+        CheckConstraint(
+            "turn_index >= 0",
+            name="ck_legal_question_messages_turn_index",
+        ),
+        CheckConstraint(
+            "length(content) > 0",
+            name="ck_legal_question_messages_content_nonempty",
+        ),
+        UniqueConstraint(
+            "conversation_id",
+            "turn_index",
+            "role",
+            name="uq_legal_question_message_turn_role",
+        ),
+        Index(
+            "ix_legal_question_messages_conversation_turn",
+            "conversation_id",
+            "turn_index",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("legal_question_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_status: Mapped[Optional[str]] = mapped_column(String(30))
+    review_date: Mapped[Optional[date]] = mapped_column(Date)
+    citations_snapshot: Mapped[List[Dict[str, Any]]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
+    model_name: Mapped[Optional[str]] = mapped_column(String(255))
+    model_version: Mapped[Optional[str]] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    conversation: Mapped["LegalQuestionConversation"] = relationship(
+        back_populates="messages"
+    )
 
 
 class Organization(Base):

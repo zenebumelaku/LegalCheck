@@ -29,6 +29,7 @@ def test_real_redis_cache_round_trip_and_ttl() -> None:
             LegalQuestionCitation(
                 source_id=uuid4(),
                 source_title="Synthetic test fixture; not legal evidence",
+                source_version_label="synthetic-fixture-v1",
                 law_number="SYNTHETIC-ONLY",
                 source_url="https://example.test/synthetic",
                 provision_id=uuid4(),

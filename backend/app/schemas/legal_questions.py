@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Literal, Optional
 from uuid import UUID
 
@@ -52,6 +52,7 @@ class LegalQuestionLLMResponse(BaseModel):
 class LegalQuestionCitation(BaseModel):
     source_id: UUID
     source_title: str
+    source_version_label: Optional[str] = None
     law_number: Optional[str]
     source_url: Optional[str]
     provision_id: UUID
@@ -75,3 +76,43 @@ class LegalQuestionAnswer(BaseModel):
         "determine legal rights or obligations. Verify the cited source and "
         "consult a qualified legal professional."
     )
+
+
+class LegalQuestionConversationRequest(LegalQuestionRequest):
+    conversation_id: Optional[UUID] = None
+
+
+class LegalQuestionConversationAnswer(BaseModel):
+    conversation_id: UUID
+    answer: LegalQuestionAnswer
+
+
+class LegalQuestionMessageResponse(BaseModel):
+    id: UUID
+    turn_index: int
+    role: Literal["user", "assistant"]
+    content: str
+    answer_status: Optional[Literal["answered", "insufficient_evidence"]] = None
+    review_date: Optional[date] = None
+    citations: list[LegalQuestionCitation] = Field(default_factory=list)
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
+    created_at: datetime
+
+
+class LegalQuestionConversationSummary(BaseModel):
+    id: UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class LegalQuestionConversationPage(BaseModel):
+    items: list[LegalQuestionConversationSummary]
+    limit: int
+    offset: int
+    total: int
+
+
+class LegalQuestionConversationDetail(LegalQuestionConversationSummary):
+    messages: list[LegalQuestionMessageResponse]

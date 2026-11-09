@@ -1,4 +1,5 @@
 import json
+import hashlib
 import logging
 from datetime import date
 from typing import Optional, Protocol
@@ -140,6 +141,7 @@ def _validate_citations(
             LegalQuestionCitation(
                 source_id=source.id,
                 source_title=source.title,
+                source_version_label=result.version_label,
                 law_number=source.law_number,
                 source_url=source.original_source_url,
                 provision_id=provision.id,
@@ -164,11 +166,17 @@ def answer_legal_question(
     answer_cache: Optional[LegalQuestionCache] = None,
     settings: Optional[Settings] = None,
     top_k: int = 5,
+    generation_context: Optional[str] = None,
+    cache_scope: Optional[str] = None,
 ) -> LegalQuestionAnswer:
     current_settings = settings or get_settings()
     normalized_question = normalize_legal_question(question)
     if not normalized_question:
         raise ValueError("question must not be blank.")
+    if generation_context and not cache_scope:
+        raise ValueError(
+            "Private conversation context requires a scoped answer cache key."
+        )
     review_date = (review_context.review_date if review_context else None) or date.today()
     context = (review_context or LegalReviewContext()).model_copy(
         update={"review_date": review_date, "include_unverified": False}
@@ -187,6 +195,12 @@ def answer_legal_question(
                 context={
                     "review_context": context.model_dump(mode="json"),
                     "top_k": top_k,
+                    "cache_scope": cache_scope,
+                    "private_context_digest": (
+                        hashlib.sha256(generation_context.encode("utf-8")).hexdigest()
+                        if generation_context
+                        else None
+                    ),
                 },
                 knowledge_base_version=legal_knowledge_base_version(db),
                 settings=current_settings,
@@ -203,8 +217,13 @@ def answer_legal_question(
                 extra={"error_type": type(exc).__name__},
             )
 
+    contextual_question = (
+        f"{generation_context}\n\nCurrent question: {normalized_question}"
+        if generation_context
+        else normalized_question
+    )
     retrieval = retrieve_legal_evidence(
-        normalized_question,
+        contextual_question,
         context,
         100,
         db=db,
@@ -236,7 +255,7 @@ def answer_legal_question(
 
     try:
         raw_response = provider.answer_legal_question(
-            normalized_question,
+            contextual_question,
             [_evidence_payload(result) for result in eligible_results],
         )
     except LLMProviderUnavailableError as exc:

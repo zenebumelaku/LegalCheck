@@ -366,6 +366,26 @@ corpus is bundled with the application; production answers require
 independently verified source material in the existing legal-source registry.
 The endpoint and its tests do not establish legal correctness.
 
+Authenticated conversation history is available through
+`POST /api/v1/legal-questions/conversations` to create a conversation or append
+a question (include `conversation_id` to continue), `GET
+/api/v1/legal-questions/conversations?limit=20&offset=0` to list the current
+user's conversations, `GET /api/v1/legal-questions/conversations/{id}` to read
+messages and citation snapshots, and `DELETE
+/api/v1/legal-questions/conversations/{id}` to delete a conversation and its
+messages. A new conversation returns `201`; appending returns `200`. Other
+users' conversation IDs are treated as not found. Conversation messages and
+answer citation details are snapshots; later legal-source edits do not rewrite
+past responses.
+
+Conversation follow-ups send a bounded recent transcript alongside retrieved
+evidence. Their answer-cache keys include the owner scope and a digest of that
+transcript, so private conversation-derived answers are not shared across
+users or with the public-question endpoint. The transcript itself is not
+stored in Redis. Conversation text is stored in the application's database
+until the owner deletes the conversation; provider credentials, audit content,
+and contract documents are not copied into conversation records.
+
 Supported answers use Redis cache-aside before retrieval, embedding, or LLM
 work. Cache keys are deterministic hashes of the normalized public question,
 review context, configured provider/model versions, cache version, prompt
@@ -381,9 +401,10 @@ The cache is fail-open: Redis read/write errors are logged and the request
 continues through normal retrieval and configured AI generation. It never
 turns a Redis outage into a cached or hardcoded answer. Only validated,
 supported answers are cached; insufficient-evidence results and failures are
-not. Cache entries contain public legal Q&A results only, never contract text
-or audit output. User identity is not part of the key because legal Q&A
-answers depend only on public legal sources and request context.
+not. Public endpoint cache entries contain public legal Q&A results only,
+never contract text or audit output. User identity is omitted only for public
+questions whose answer depends exclusively on public legal sources and request
+context; conversation answers use the owner-scoped key described above.
 
 To exercise the cache against a real Redis server locally, start Redis (for
 example, `redis-server` in another terminal), then run from `backend/`:

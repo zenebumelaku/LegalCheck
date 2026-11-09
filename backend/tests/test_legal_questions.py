@@ -9,7 +9,13 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.db.models import LegalProvision, LegalProvisionChunk, LegalSource
+from app.db.models import (
+    LegalProvision,
+    LegalProvisionChunk,
+    LegalQuestionConversation,
+    LegalQuestionMessage,
+    LegalSource,
+)
 from app.db.session import get_db
 from app.main import app
 from app.schemas.legal_questions import LegalQuestionAnswer
@@ -174,6 +180,28 @@ def _ask(
         headers={"Authorization": f"Bearer {token}"},
         json={
             "question": question,
+            "review_context": {
+                "review_date": "2024-01-01",
+                "jurisdiction": "ET",
+                "language": "en",
+            },
+        },
+    )
+
+
+def _ask_in_conversation(
+    client: TestClient,
+    token: str,
+    *,
+    question: str = "What does the synthetic fixture say about wages?",
+    conversation_id: Optional[str] = None,
+) -> object:
+    return client.post(
+        "/api/v1/legal-questions/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "question": question,
+            "conversation_id": conversation_id,
             "review_context": {
                 "review_date": "2024-01-01",
                 "jurisdiction": "ET",
@@ -368,6 +396,276 @@ def test_cache_key_includes_explicit_cache_version_and_normalizes_question() -> 
 
     assert first_key == normalized_key
     assert first_key != next_version_key
+
+
+def test_conversation_create_continue_and_read_preserves_citation_snapshot(
+    legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=user_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+
+    created = _ask_in_conversation(
+        legal_question_client,
+        token,
+        question="What does the fixture say about wages?",
+    )
+    assert created.status_code == 201
+    conversation_id = created.json()["conversation_id"]
+    citation_snapshot = created.json()["answer"]["citations"][0]
+
+    continued = _ask_in_conversation(
+        legal_question_client,
+        token,
+        question="Can you clarify that wage rule?",
+        conversation_id=conversation_id,
+    )
+    assert continued.status_code == 200
+    assert "Prior conversation turns" in provider.calls[1][0]
+    assert "What does the fixture say about wages?" in provider.calls[1][0]
+
+    provision.legal_source.title = "Updated synthetic source title"
+    provision.legal_source.version_label = "updated-synthetic-version"
+    provision.text = "Updated synthetic content; not the historical fixture."
+    db_session.commit()
+    history = legal_question_client.get(
+        f"/api/v1/legal-questions/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert history.status_code == 200
+    messages = history.json()["messages"]
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert messages[1]["citations"][0] == citation_snapshot
+    assert (
+        messages[1]["citations"][0]["source_title"]
+        == "Synthetic fixture source; not legal evidence"
+    )
+    assert messages[1]["citations"][0]["source_version_label"].startswith(
+        "synthetic-"
+    )
+    assert messages[1]["content"] == _supported_response(provision)["answer"]
+
+
+def test_conversation_list_is_owned_and_paginated(
+    legal_question_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner_id, owner_token = _login(legal_question_client)
+    _, other_token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=owner_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+    conversation_ids = []
+    for question in (
+        "First synthetic fixture question?",
+        "Second synthetic fixture question?",
+        "Third synthetic fixture question?",
+    ):
+        response = _ask_in_conversation(
+            legal_question_client,
+            owner_token,
+            question=question,
+        )
+        assert response.status_code == 201
+        conversation_ids.append(response.json()["conversation_id"])
+
+    first_page = legal_question_client.get(
+        "/api/v1/legal-questions/conversations",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        params={"limit": 2, "offset": 0},
+    )
+    second_page = legal_question_client.get(
+        "/api/v1/legal-questions/conversations",
+        headers={"Authorization": f"Bearer {owner_token}"},
+        params={"limit": 2, "offset": 2},
+    )
+    other_users_page = legal_question_client.get(
+        "/api/v1/legal-questions/conversations",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+
+    assert first_page.status_code == second_page.status_code == 200
+    assert first_page.json()["total"] == 3
+    assert len(first_page.json()["items"]) == 2
+    assert len(second_page.json()["items"]) == 1
+    assert len(
+        {
+            item["id"]
+            for item in first_page.json()["items"] + second_page.json()["items"]
+        }
+    ) == 3
+    assert other_users_page.json()["total"] == 0
+    assert set(conversation_ids) == {
+        item["id"]
+        for item in first_page.json()["items"] + second_page.json()["items"]
+    }
+
+
+def test_conversation_access_and_mutations_are_owner_scoped(
+    legal_question_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner_id, owner_token = _login(legal_question_client)
+    _, other_token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=owner_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+    created = _ask_in_conversation(
+        legal_question_client,
+        owner_token,
+        question="What does the fixture say?",
+    )
+    conversation_id = created.json()["conversation_id"]
+
+    read_foreign = legal_question_client.get(
+        f"/api/v1/legal-questions/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+    continue_foreign = _ask_in_conversation(
+        legal_question_client,
+        other_token,
+        question="Continue another user's conversation",
+        conversation_id=conversation_id,
+    )
+    delete_foreign = legal_question_client.delete(
+        f"/api/v1/legal-questions/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+    anonymous_read = legal_question_client.get(
+        f"/api/v1/legal-questions/conversations/{conversation_id}"
+    )
+
+    assert read_foreign.status_code == 404
+    assert continue_foreign.status_code == 404
+    assert delete_foreign.status_code == 404
+    assert anonymous_read.status_code == 401
+    assert len(provider.calls) == 1
+    assert legal_question_client.get(
+        f"/api/v1/legal-questions/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    ).status_code == 200
+
+
+def test_deleting_conversation_cascades_messages(
+    legal_question_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=user_id)
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: MockQuestionProvider(_supported_response(provision)),
+    )
+    created = _ask_in_conversation(
+        legal_question_client,
+        token,
+        question="Delete this synthetic conversation?",
+    )
+    conversation_id = UUID(created.json()["conversation_id"])
+
+    deleted = legal_question_client.delete(
+        f"/api/v1/legal-questions/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert deleted.status_code == 204
+    assert db_session.get(LegalQuestionConversation, conversation_id) is None
+    assert (
+        db_session.query(LegalQuestionMessage)
+        .filter_by(conversation_id=conversation_id)
+        .count()
+        == 0
+    )
+
+
+def test_conversation_cache_keys_are_isolated_by_user(
+    legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_user_id, first_token = _login(legal_question_client)
+    second_user_id, second_token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=first_user_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+
+    first = _ask_in_conversation(
+        legal_question_client,
+        first_token,
+        question="What does the synthetic fixture say?",
+    )
+    second = _ask_in_conversation(
+        legal_question_client,
+        second_token,
+        question="What does the synthetic fixture say?",
+    )
+
+    assert first.status_code == second.status_code == 201
+    assert first.json()["answer"]["cache_hit"] is False
+    assert second.json()["answer"]["cache_hit"] is False
+    assert len(provider.calls) == 2
+    assert len(answer_cache.get_calls) == 2
+    assert answer_cache.get_calls[0] != answer_cache.get_calls[1]
+    assert first_user_id != second_user_id
+
+
+def test_conversation_context_changes_cache_key(
+    legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=user_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda: provider,
+    )
+    first = _ask_in_conversation(
+        legal_question_client,
+        token,
+        question="What does the synthetic fixture say?",
+    )
+    conversation_id = first.json()["conversation_id"]
+    continued = _ask_in_conversation(
+        legal_question_client,
+        token,
+        question="What does the synthetic fixture say?",
+        conversation_id=conversation_id,
+    )
+
+    assert first.status_code == 201
+    assert continued.status_code == 200
+    assert len(provider.calls) == 2
+    assert len(answer_cache.get_calls) == 2
+    assert answer_cache.get_calls[0] != answer_cache.get_calls[1]
 
 
 def test_redis_failure_fails_open_without_cache_hit_or_write(
