@@ -66,6 +66,15 @@ class LegalQuestionLLMProvider(Protocol):
     def answer_legal_question(self, question: str, evidence: list[dict]) -> str: ...
 
 
+def _get_legal_question_provider() -> LegalQuestionLLMProvider:
+    settings = get_settings()
+    if settings.legal_qa_llm_provider is None:
+        return get_llm_provider()
+    return get_llm_provider(
+        settings.model_copy(update={"llm_provider": settings.legal_qa_llm_provider})
+    )
+
+
 def _evidence_payload(result: LegalEvidenceResult) -> dict:
     return {
         "source_id": str(result.source_id),
@@ -256,7 +265,7 @@ def answer_legal_question(
         )
 
     try:
-        provider = llm_provider or get_llm_provider()
+        provider = llm_provider or _get_legal_question_provider()
     except LLMProviderError as exc:
         raise LegalQuestionProviderUnavailable(
             f"AI answer generation is unavailable: {exc}"

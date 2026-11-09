@@ -18,9 +18,11 @@ from app.db.models import (
     LegalSource,
     User,
 )
-from app.services.compliance_analysis import analyze_audit
+from app.services.compliance_analysis import ComplianceAnalysisError, analyze_audit
 from app.services.llm_provider import (
     LLMProviderError,
+    LLMProviderRateLimitError,
+    LLMProviderUnavailableError,
     OpenAICompatibleLLMProvider,
 )
 
@@ -293,6 +295,48 @@ def test_provider_failure_marks_audit_failed_without_completed_time(db_session) 
     assert audit.failure_code == "llm_provider_failure"
     assert audit.completed_at is None
     assert "synthetic provider failure" not in (audit.failure_message or "")
+
+
+@pytest.mark.parametrize(
+    ("provider_error", "expected_code", "message_fragment"),
+    [
+        (
+            LLMProviderRateLimitError("synthetic provider limit"),
+            "llm_provider_rate_limited",
+            "rate limit",
+        ),
+        (
+            LLMProviderUnavailableError("synthetic provider unavailable"),
+            "llm_provider_unavailable",
+            "unavailable",
+        ),
+    ],
+)
+def test_provider_rate_limits_and_unavailability_are_reported_safely(
+    db_session,
+    provider_error,
+    expected_code: str,
+    message_fragment: str,
+) -> None:
+    audit, _ = _make_audit(db_session)
+
+    class FailingProvider(MockLLM):
+        def analyze_clause(self, clause: dict, evidence: list[dict]) -> str:
+            raise provider_error
+
+    with pytest.raises(ComplianceAnalysisError, match=message_fragment):
+        analyze_audit(
+            audit.id,
+            db=db_session,
+            storage=MemoryStorage(_docx_bytes()),
+            llm_provider=FailingProvider(),
+        )
+
+    db_session.refresh(audit)
+    assert audit.audit_status == "failed"
+    assert audit.failure_code == expected_code
+    assert message_fragment in (audit.failure_message or "").lower()
+    assert "synthetic provider" not in (audit.failure_message or "")
 
 
 def test_injection_in_contract_is_sent_as_clause_data_not_prompt_role(db_session) -> None:

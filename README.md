@@ -76,7 +76,10 @@ python -m app.workers.audit_worker
 ```
 
 The API enqueues contract audits; the RQ worker consumes them. Legal Q&A is
-served directly by the API and does not use this audit queue.
+served directly by the API and does not use this audit queue. On macOS local
+development, use `rq worker --worker-class rq.worker.SimpleWorker legalcheck-audits`
+to avoid Objective-C runtime crashes from RQ's fork-based worker; use the
+standard worker in a Linux deployment.
 
 For the frontend, configure `VITE_API_BASE_URL` in your local
 `frontend/.env`, then run:
@@ -120,8 +123,24 @@ service connection strings. `CORS_ORIGINS` is a JSON array of exact frontend
 origins.
 
 LLM generation is disabled by default. To enable it, configure
-`LLM_PROVIDER=openai_compatible` or `LLM_PROVIDER=ollama`, plus the provider's
-`LLM_API_URL`, `LLM_MODEL_NAME`, and optional `LLM_API_KEY` as appropriate.
+`LLM_PROVIDER=openai_compatible`, `LLM_PROVIDER=ollama`, or
+`LLM_PROVIDER=gemini`, plus the provider's `LLM_API_URL` (where applicable),
+`LLM_MODEL_NAME`, and `LLM_API_KEY` as appropriate. Gemini uses Google's
+Generative Language API over HTTPS and the API key is sent only in the
+`x-goog-api-key` request header. For legal-Q&A-only generation, set
+`LLM_PROVIDER=disabled` and `LEGAL_QA_LLM_PROVIDER=gemini` (or another supported
+provider); that keeps contract-audit AI disabled. The Q&A override uses the
+configured LLM model, version, URL, and key settings, and is included in cache
+keys. Contract analysis can be separately enabled with
+`CONTRACT_ANALYSIS_LLM_PROVIDER=gemini` (or another supported provider); this
+setting explicitly opts in to sending extracted private contract clauses and
+retrieved legal evidence to that provider. `disabled` is the documented
+default for this override. When unset, the existing `LLM_PROVIDER` setting
+continues to control contract-analysis generation for backward compatibility.
+Gemini retries one network or 5xx failure; rate limits and
+unavailable models are reported explicitly rather than retried indefinitely.
+Update `LLM_MODEL_NAME` when a configured Gemini model is retired.
+
 Ollama requires a separately installed/running server and available model.
 Remote endpoints must follow the application's HTTPS rules; unauthenticated
 HTTP is limited to loopback development endpoints. If the provider is disabled,
@@ -684,8 +703,15 @@ and no example answer is returned if generation is unconfigured or fails.
 Local inference depends on the selected model and host resources; no free-tier,
 quota, or quality guarantee is implied. The existing
 `openai_compatible` provider remains available for externally configured
-services. Both options keep credentials server-side and require HTTPS for
-remote endpoints; unauthenticated HTTP is permitted only on loopback.
+services. Gemini is supported by the same provider interface. Configure
+`LEGAL_QA_LLM_PROVIDER=gemini` for public legal Q&A and
+`CONTRACT_ANALYSIS_LLM_PROVIDER=gemini` only when contract-clause transmission
+to Gemini is explicitly approved. Leave `LLM_PROVIDER=disabled` to avoid
+implicitly sharing the provider selection across both workflows. External
+services receive the question and retrieved legal evidence used for Q&A, and
+the extracted clauses and retrieved evidence used for contract analysis. Both
+options keep credentials server-side and require HTTPS for remote endpoints;
+unauthenticated HTTP is permitted only on loopback.
 
 For an integration from a trusted workflow, call `analyze_audit(audit_id,
 db=..., storage=..., llm_provider=...)` from

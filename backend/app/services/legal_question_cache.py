@@ -241,7 +241,11 @@ def legal_question_cache_key(
         "question": normalize_legal_question(question),
         "review_context": context,
         "knowledge_base_version": knowledge_base_version,
-        "llm_provider": settings.llm_provider,
+        "llm_provider": (
+            settings.legal_qa_llm_provider
+            if settings.legal_qa_llm_provider is not None
+            else settings.llm_provider
+        ),
         "llm_api_url": settings.llm_api_url,
         "llm_model_name": settings.llm_model_name,
         "llm_model_version": settings.llm_model_version,

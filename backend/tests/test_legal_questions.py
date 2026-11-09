@@ -420,6 +420,30 @@ def test_cache_key_includes_explicit_cache_version_and_normalizes_question() -> 
     assert first_key != next_version_key
 
 
+def test_cache_key_includes_effective_legal_qa_provider() -> None:
+    common = {
+        "question": "What is the rule?",
+        "context": {"jurisdiction": "ET", "review_date": "2024-01-01"},
+        "knowledge_base_version": "synthetic-kb-v1",
+    }
+    audit_provider_disabled = Settings(llm_provider="disabled")
+    qa_provider_gemini = Settings(
+        llm_provider="disabled",
+        legal_qa_llm_provider="gemini",
+    )
+
+    disabled_key = legal_question_cache_key(
+        settings=audit_provider_disabled,
+        **common,
+    )
+    gemini_key = legal_question_cache_key(
+        settings=qa_provider_gemini,
+        **common,
+    )
+
+    assert disabled_key != gemini_key
+
+
 def test_conversation_create_continue_and_read_preserves_citation_snapshot(
     legal_question_client: TestClient,
     answer_cache: MemoryAnswerCache,

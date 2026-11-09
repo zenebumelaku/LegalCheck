@@ -40,11 +40,22 @@ class Settings(BaseSettings):
         max_length=255,
     )
     embedding_model_version: str = Field(default="v1", min_length=1, max_length=100)
-    llm_provider: Literal["disabled", "openai_compatible", "ollama"] = "disabled"
+    llm_provider: Literal[
+        "disabled",
+        "openai_compatible",
+        "ollama",
+        "gemini",
+    ] = "disabled"
+    legal_qa_llm_provider: Optional[
+        Literal["disabled", "openai_compatible", "ollama", "gemini"]
+    ] = None
     llm_api_url: Optional[str] = None
     llm_api_key: Optional[SecretStr] = None
     llm_model_name: str = Field(default="not-configured", min_length=1, max_length=255)
     llm_model_version: str = Field(default="v1", min_length=1, max_length=100)
+    contract_analysis_llm_provider: Optional[
+        Literal["disabled", "openai_compatible", "ollama", "gemini"]
+    ] = None
     llm_timeout_seconds: int = Field(default=90, gt=0, le=300)
     legal_qa_cache_version: str = Field(default="v1", min_length=1, max_length=100)
     legal_qa_cache_ttl_seconds: int = Field(default=3600, ge=0, le=2_592_000)
@@ -70,7 +81,13 @@ class Settings(BaseSettings):
     def empty_embedding_model_path_is_unset(cls, value: object) -> object:
         return None if value == "" else value
 
-    @field_validator("resend_api_key", "password_reset_from_email", mode="before")
+    @field_validator(
+        "resend_api_key",
+        "password_reset_from_email",
+        "legal_qa_llm_provider",
+        "contract_analysis_llm_provider",
+        mode="before",
+    )
     @classmethod
     def empty_password_reset_values_are_unset(cls, value: object) -> object:
         return None if value == "" else value

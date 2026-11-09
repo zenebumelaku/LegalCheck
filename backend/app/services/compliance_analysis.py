@@ -30,7 +30,13 @@ from app.schemas.compliance_analysis import (
 from app.schemas.legal_retrieval import LegalEvidenceResult, LegalReviewContext
 from app.services.document_extraction import ExtractedPage, extract_document
 from app.services.legal_retrieval import retrieve_legal_evidence
-from app.services.llm_provider import LLMProvider, LLMProviderError, get_llm_provider
+from app.services.llm_provider import (
+    LLMProvider,
+    LLMProviderError,
+    LLMProviderRateLimitError,
+    LLMProviderUnavailableError,
+    get_contract_analysis_provider,
+)
 from app.storage.interface import PrivateFileStorage
 
 logger = logging.getLogger(__name__)
@@ -268,6 +274,7 @@ def _mark_failed(
     audit_id: UUID,
     code: str,
     attempt_id: UUID,
+    message: str,
 ) -> None:
     db.rollback()
     db.execute(
@@ -289,9 +296,7 @@ def _mark_failed(
             processing_attempt_id=None,
             completed_at=None,
             failure_code=code,
-            failure_message=(
-                "The analysis could not be completed. No completed legal review was produced."
-            ),
+            failure_message=message,
         )
     )
     db.commit()
@@ -449,7 +454,7 @@ def analyze_audit(
             "analyzing",
             attempt_id=attempt_id,
         )
-        provider = llm_provider or get_llm_provider()
+        provider = llm_provider or get_contract_analysis_provider()
         audit = db.get(Audit, audit_id)
         audit.model_identifier = f"{provider.model_name}:{provider.model_version}"
         db.commit()
@@ -467,8 +472,11 @@ def analyze_audit(
                     clause.model_dump(mode="json"),
                     [_evidence_payload(result) for result in retrieved_results],
                 )
+            except LLMProviderError:
+                raise
+            try:
                 parsed = LLMClauseAnalysis.model_validate(json.loads(raw_response))
-            except Exception as exc:
+            except (TypeError, ValueError) as exc:
                 raise LLMProviderError(
                     "The configured analysis provider returned an invalid response."
                 ) from exc
@@ -545,24 +553,46 @@ def analyze_audit(
         db.commit()
         return result
     except (LLMProviderError, OSError, TypeError, ValueError, SQLAlchemyError) as exc:
-        failure_code = (
-            "llm_provider_failure"
-            if isinstance(exc, LLMProviderError)
-            else "analysis_failed"
+        failure_message = (
+            "The analysis could not be completed. No completed legal review was produced."
         )
+        if isinstance(exc, LLMProviderRateLimitError):
+            failure_code = "llm_provider_rate_limited"
+            failure_message = (
+                "The analysis could not be completed because the configured AI "
+                "provider rate limit was reached. Retry the audit later. No "
+                "completed legal review was produced."
+            )
+        elif isinstance(exc, LLMProviderUnavailableError):
+            failure_code = "llm_provider_unavailable"
+            failure_message = (
+                "The analysis could not be completed because the configured AI "
+                "provider or model is unavailable. Retry later. No completed legal "
+                "review was produced."
+            )
+        elif isinstance(exc, LLMProviderError):
+            failure_code = "llm_provider_failure"
+            failure_message = (
+                "The analysis could not be completed because the configured AI "
+                "provider failed or returned an invalid response. No completed "
+                "legal review was produced."
+            )
+        else:
+            failure_code = "analysis_failed"
         try:
-            _mark_failed(db, audit_id, failure_code, attempt_id)
+            _mark_failed(db, audit_id, failure_code, attempt_id, failure_message)
         except SQLAlchemyError:
             logger.error(
                 "Could not persist failed audit status for audit %s",
                 audit_id,
             )
         logger.warning(
-            "Compliance analysis failed for audit %s with code %s",
+            "Compliance analysis failed for audit %s with code %s (%s)",
             audit_id,
             failure_code,
+            type(exc).__name__,
         )
         raise ComplianceAnalysisError(
             failure_code,
-            "The analysis could not be completed. No completed legal review was produced.",
+            failure_message,
         ) from exc
