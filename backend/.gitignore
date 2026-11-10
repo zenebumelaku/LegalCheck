@@ -5,4 +5,5 @@ __pycache__/
 *.py[cod]
 var/private-documents/
 *.db
+*.rdb
 redis-stable/

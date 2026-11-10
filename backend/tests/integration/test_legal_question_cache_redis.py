@@ -142,12 +142,12 @@ def test_real_redis_cache_aside_request_hit_and_knowledge_base_invalidation(
     monkeypatch.setattr(
         legal_question_answering,
         "get_legal_question_cache",
-        lambda: cache,
+        lambda *args, **kwargs: cache,
     )
     monkeypatch.setattr(
         legal_question_answering,
         "get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
     monkeypatch.setattr(
         legal_question_answering,
@@ -162,7 +162,7 @@ def test_real_redis_cache_aside_request_hit_and_knowledge_base_invalidation(
     monkeypatch.setattr(
         legal_retrieval,
         "get_embedding_provider",
-        lambda: None,
+        lambda *args, **kwargs: None,
     )
     app.dependency_overrides[get_db] = override_get_db
 

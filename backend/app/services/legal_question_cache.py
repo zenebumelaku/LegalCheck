@@ -256,6 +256,17 @@ def legal_question_cache_key(
         "embedding_api_url": settings.embedding_api_url,
         "embedding_model_name": settings.embedding_model_name,
         "embedding_model_version": settings.embedding_model_version,
+        "retrieval_mode": settings.legal_retrieval_mode,
+        "retrieval_candidate_k": settings.legal_retrieval_candidate_k,
+        "retrieval_rrf_offset": settings.legal_retrieval_rrf_offset,
+        "answer_top_k": settings.legal_qa_top_k,
+        "reranker_enabled": settings.legal_reranker_enabled,
+        "reranker_model_path": (
+            str(settings.legal_reranker_model_path)
+            if settings.legal_reranker_model_path
+            else None
+        ),
+        "reranker_model_version": settings.legal_reranker_model_version,
     }
     digest = hashlib.sha256(
         json.dumps(

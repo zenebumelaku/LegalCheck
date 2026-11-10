@@ -148,8 +148,9 @@ missing, rate-limited, or unavailable, legal Q&A returns a clear error; it
 never substitutes a sample answer. No paid provider is bundled or required for
 startup.
 
-Embeddings are independently optional. `EMBEDDING_PROVIDER=disabled` uses
-non-semantic retrieval only. Configure the supported OpenAI-compatible
+Embeddings are independently optional. `EMBEDDING_PROVIDER=disabled` omits
+vector retrieval; exact-article and BM25 keyword retrieval still work.
+Configure the supported OpenAI-compatible
 embedding endpoint, or explicitly install and provision the optional local
 Sentence Transformers model as described in
 [Legal retrieval and embeddings](#legal-retrieval-and-embeddings). The local
@@ -165,9 +166,11 @@ legal Q&A responses under a separate key namespace.
 disables answer caching without disabling Redis-backed rate limiting or audit
 queues. `LEGAL_QA_CACHE_VERSION` defaults to `v1`; increment it to make old
 answer keys unreachable after answer-logic or configuration changes not already
-included in the key. Legal-source/provision/index changes update the knowledge
-base fingerprint automatically. Old versioned entries expire by TTL and are
-not physically deleted at invalidation time.
+included in the key. Retrieval mode, RRF offset, candidate/result cutoffs,
+reranker model path/version, and embedding configuration are also part of the
+key. Legal-source/provision/index changes update the knowledge-base fingerprint
+automatically. Old versioned entries expire by TTL and are not physically
+deleted at invalidation time.
 
 Redis cache read/write failures are fail-open for Q&A: the request continues to
 retrieval and generation and does not return a fabricated answer. This is
@@ -418,9 +421,63 @@ curl -X POST "http://127.0.0.1:8000/api/v1/legal-sources/<source-id>/verify" \
 
 ## Legal retrieval and embeddings
 
-The retrieval layer uses PostgreSQL `pgvector` plus PostgreSQL full-text search.
-Apply the latest Alembic migration after installing PostgreSQL with pgvector
-available:
+The single legal-evidence retriever retains exact-article lookup and supports
+two lexical/vector strategies. The default `LEGAL_RETRIEVAL_MODE=hybrid`
+combines application-side BM25 and the existing pgvector semantic search with
+reciprocal rank fusion. `LEGAL_RETRIEVAL_MODE=baseline` retains the earlier
+keyword-ranking path for comparison. Exact article matches remain part of the
+rank fusion in both modes. Candidate rows are keyed by provision ID, so
+overlapping chunks do not produce duplicate provisions; the selected passage
+retains provision/article, source/version, page, and URL metadata.
+
+```mermaid
+flowchart LR
+  Q[Question] --> X[Exact article lookup]
+  Q --> B[BM25 lexical retrieval]
+  Q --> V[Vector retrieval]
+  X --> F[RRF fusion and provision deduplication]
+  B --> F
+  V --> F
+  F --> C[Top 20 candidates]
+  C --> R[Optional local cross-encoder]
+  R --> K[Top 5 evidence passages]
+  K --> L[Answer generation]
+  Q --> H{Redis answer cache}
+  H -->|hit| A[Cached answer and citations]
+  H -->|miss| X
+```
+
+BM25 ranks curated provision text using query-term frequency, inverse document
+frequency across eligible provisions, and document-length normalization.
+Vector search reuses the existing 384-dimensional provision chunks and
+configured embedding provider. RRF adds `1 / (offset + rank)` from each
+retrieval list (with a deliberate higher weight for exact-article matches);
+`LEGAL_RETRIEVAL_RRF_OFFSET` defaults to 60. The final candidate list is
+deduplicated by provision before reranking.
+
+Cross-encoder reranking is optional and disabled by default. Set
+`LEGAL_RERANKER_ENABLED=true`, `LEGAL_RERANKER_MODEL_PATH` to an existing local
+Sentence Transformers cross-encoder directory, and
+`LEGAL_RERANKER_MODEL_VERSION` to its revision label. The cross-encoder scores
+up to `LEGAL_RETRIEVAL_CANDIDATE_K` (default 20) fused candidates and answer
+generation receives up to `LEGAL_QA_TOP_K` (default 5) eligible passages.
+There is no model download during application startup; missing model files,
+load errors, and inference errors are logged and fall back to fused order.
+The same optional `sentence-transformers` package is used for local embeddings
+and reranking; install it only when enabling one of those local models, and
+provision model files explicitly.
+
+The answer service checks Redis before retrieval, embedding, or LLM generation.
+A hit returns the cached answer and source citations. A miss retrieves and
+validates evidence, calls the configured LLM, and caches only a supported
+answer plus its citations for the configured TTL. Redis errors fail open and
+continue through retrieval/generation. The key includes the question/context,
+knowledge-base fingerprint, and retrieval/embedding/reranker/LLM configuration,
+so changing those settings or indexed legal content cannot reuse an
+inappropriately stale answer. TTL expiry and key versioning remain unchanged.
+
+PostgreSQL `pgvector` is required for vector search. Apply the latest Alembic
+migration after installing PostgreSQL with pgvector available:
 
 ```bash
 cd backend
@@ -523,10 +580,9 @@ boundaries are not a legal interpretation: verify generated chunk text against
 the original document, especially for Amharic or other languages and long
 multi-part rules.
 
-`retrieve_legal_evidence(query, review_context, top_k, db=...)` combines exact
-article matching, keyword retrieval, and semantic ranking when a compatible
-provider is configured. A reranker may be supplied through its interface;
-none is enabled by default. `LegalReviewContext` supports review date,
+`retrieve_legal_evidence(query, review_context, top_k, db=...)` is the shared
+retrieval entry point used by both legal Q&A and contract analysis.
+`LegalReviewContext` supports review date,
 jurisdiction, language, source type, law number, and article filters. Review
 dates constrain retrieval to known effective/end-date intervals; missing
 dates and non-`current` legal statuses are surfaced as applicability
@@ -656,11 +712,18 @@ LLM.
   ```bash
   cd backend
   LEGAL_QA_EVALUATION_DATABASE_URL='postgresql+psycopg://…' \
-    python -m pytest -q -m 'legal_evaluation and postgres_integration' \
-    tests/evaluation
+    python -m app.scripts.evaluate_legal_retrieval \
+      --dataset tests/evaluation/dataset.json \
+      --output evaluation-results.json
   ```
 
-  Until then the harness skips; no legal evaluation score is reported.
+  Add `--include-end-to-end` to measure actual answer-service latency and Redis
+  cache hits (requires configured QA services); use a `.csv` output suffix for
+  per-case CSV. The benchmark compares baseline, BM25+vector RRF, and
+  BM25+vector RRF with cross-encoder reranking. It reports Recall@5,
+  Precision@5, MRR, nDCG@5, retrieval latency, and optional end-to-end latency
+  and observed cache hit rate. Until reviewed cases are provided and the
+  benchmark is run, no legal evaluation score or improvement is reported.
 - **Manual legal review** is a separate required activity, described in
   `backend/tests/evaluation/README.md`. Automated tests do not establish legal
   correctness.

@@ -1,6 +1,5 @@
 from datetime import date, datetime, timezone
 from typing import Optional
-from uuid import UUID
 
 import pytest
 from sqlalchemy import select
@@ -24,7 +23,8 @@ from app.services.legal_embedding_index import (
     LegalEmbeddingIndexingError,
     generate_embeddings_for_source,
 )
-from app.services.legal_retrieval import retrieve_legal_evidence
+from app.services.legal_retrieval import _rrf_score, retrieve_legal_evidence
+import app.services.legal_reranking as legal_reranking
 
 pytestmark = pytest.mark.unit
 
@@ -332,6 +332,200 @@ def test_hybrid_retrieval_combines_article_keyword_and_mock_semantics(
     assert result.retrieval_scores.exact_article == 1.0
     assert result.retrieval_scores.keyword > 0
     assert result.retrieval_scores.semantic > 0
+
+
+def test_bm25_retrieval_prefers_repeated_shorter_keyword_match(
+    db_session: Session,
+) -> None:
+    source = _add_source(
+        db_session,
+        version="synthetic-bm25-v1",
+        provisions=[
+            ("bm25-strong", "wage wage wage wage calculation."),
+            ("bm25-weak", "wage " + ("unrelated fixture text " * 40)),
+        ],
+    )
+
+    response = retrieve_legal_evidence(
+        "wage",
+        LegalReviewContext(jurisdiction="ET"),
+        5,
+        db=db_session,
+        settings=Settings(embedding_provider="disabled", legal_retrieval_mode="hybrid"),
+    )
+
+    assert [result.provision_id for result in response.results] == [
+        provision.id for provision in source.provisions
+    ]
+    assert response.results[0].retrieval_scores.keyword > (
+        response.results[1].retrieval_scores.keyword
+    )
+
+
+def test_rrf_combines_keyword_and_vector_ranks_and_deduplicates_provisions(
+    db_session: Session,
+) -> None:
+    source = _add_source(
+        db_session,
+        version="synthetic-rrf-v1",
+        provisions=[
+            (
+                "rrf-wage",
+                "wage wage wage calculation. " + ("wage support. " * 30),
+            ),
+            ("rrf-salary", "salary calculation."),
+        ],
+    )
+
+    class ComplementaryEmbeddingProvider(SyntheticTestEmbeddingProvider):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            self.calls.append(list(texts))
+            return [
+                [1.0] + [0.0] * (self.dimensions - 1)
+                if text.strip().lower() == "wage" or "salary" in text.lower()
+                else [0.0, 1.0] + [0.0] * (self.dimensions - 2)
+                for text in texts
+            ]
+
+    provider = ComplementaryEmbeddingProvider()
+    generate_embeddings_for_source(db_session, source, provider)
+    response = retrieve_legal_evidence(
+        "wage",
+        LegalReviewContext(jurisdiction="ET"),
+        5,
+        db=db_session,
+        embedding_provider=provider,
+        settings=Settings(legal_retrieval_mode="hybrid"),
+    )
+
+    result_ids = [result.provision_id for result in response.results]
+    assert response.results[0].article_number == "rrf-wage"
+    assert len(result_ids) == len(set(result_ids))
+    assert {result.provision_id for result in response.results} == {
+        provision.id for provision in source.provisions
+    }
+
+
+def test_rrf_score_uses_reciprocal_ranks() -> None:
+    assert _rrf_score(
+        exact_rank=1,
+        keyword_rank=2,
+        semantic_rank=3,
+        offset=60,
+    ) == pytest.approx(2 / 61 + 1 / 62 + 1 / 63)
+
+
+def test_cross_encoder_reranks_candidate_set_and_preserves_metadata(
+    db_session: Session,
+) -> None:
+    source = _add_source(
+        db_session,
+        version="synthetic-rerank-v1",
+        provisions=[
+            ("rerank-first", "wage wage wage calculation."),
+            ("rerank-second", "wage calculation."),
+        ],
+    )
+
+    class ReverseReranker:
+        def rerank(self, query, results):
+            assert query == "wage"
+            assert len(results) == 2
+            return list(reversed(results))
+
+    response = retrieve_legal_evidence(
+        "wage",
+        LegalReviewContext(jurisdiction="ET"),
+        1,
+        db=db_session,
+        reranker=ReverseReranker(),
+        settings=Settings(embedding_provider="disabled"),
+    )
+
+    assert response.reranker_applied is True
+    assert response.results[0].provision_id == source.provisions[1].id
+    assert response.results[0].source_id == source.id
+    assert response.results[0].article_number == "rerank-second"
+    assert response.results[0].source_url == "https://example.test/synthetic-fixture-only.pdf"
+
+
+def test_reranker_failure_falls_back_to_fused_order(
+    db_session: Session,
+) -> None:
+    source = _add_source(
+        db_session,
+        version="synthetic-rerank-fallback-v1",
+        provisions=[
+            ("fallback-first", "wage wage wage calculation."),
+            ("fallback-second", "wage calculation."),
+        ],
+    )
+
+    class FailingReranker:
+        def rerank(self, query, results):
+            raise RuntimeError(
+                f"synthetic reranker unavailable for {query} ({len(results)} candidates)"
+            )
+
+    response = retrieve_legal_evidence(
+        "wage",
+        LegalReviewContext(jurisdiction="ET"),
+        1,
+        db=db_session,
+        reranker=FailingReranker(),
+        settings=Settings(embedding_provider="disabled"),
+    )
+
+    assert response.reranker_applied is False
+    assert response.results[0].provision_id == source.provisions[0].id
+
+
+def test_configured_reranker_is_initialized_once(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = tmp_path / "synthetic-cross-encoder"
+    model_path.mkdir()
+    initializations: list[str] = []
+
+    class SyntheticReranker:
+        def __init__(self, path):
+            initializations.append(str(path))
+
+        def rerank(self, query, results):
+            assert query
+            return results
+
+    monkeypatch.setattr(
+        legal_reranking,
+        "CrossEncoderLegalEvidenceReranker",
+        SyntheticReranker,
+    )
+    settings = Settings(
+        legal_reranker_enabled=True,
+        legal_reranker_model_path=model_path,
+        legal_reranker_model_version="test-single-load-v1",
+    )
+
+    first = legal_reranking.get_legal_evidence_reranker(settings)
+    second = legal_reranking.get_legal_evidence_reranker(settings)
+
+    assert first is second
+    assert initializations == [str(model_path.resolve())]
+
+
+def test_unavailable_reranker_model_returns_none_without_download(
+    tmp_path,
+) -> None:
+    reranker = legal_reranking.get_legal_evidence_reranker(
+        Settings(
+            legal_reranker_enabled=True,
+            legal_reranker_model_path=tmp_path / "missing-model",
+            legal_reranker_model_version="test-missing-v1",
+        )
+    )
+
+    assert reranker is None
 
 
 def test_unverified_sources_excluded_by_default_and_unknown_status_retained_as_uncertain(

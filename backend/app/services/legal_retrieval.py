@@ -1,14 +1,16 @@
+import logging
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
-from datetime import date
-from typing import Optional, Protocol
+from typing import Literal, Optional
 from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Select, func, or_, select, type_coerce
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.db.models import LegalProvision, LegalProvisionChunk, LegalSource
 from app.schemas.legal_retrieval import (
     LegalEvidenceResult,
@@ -22,19 +24,15 @@ from app.services.embeddings import (
     get_embedding_provider,
     validate_embedding,
 )
+from app.services.legal_reranking import (
+    LegalEvidenceReranker,
+    get_legal_evidence_reranker,
+)
 
 _ARTICLE_PATTERN = re.compile(r"\b(?:article|art\.?)\s+([0-9]+[a-zA-Z]?(?:\([^)]+\))?)", re.I)
 _TOKEN_PATTERN = re.compile(r"[\w'-]+", re.UNICODE)
-_RRF_OFFSET = 60
 _MAX_CANDIDATES = 250
-
-
-class LegalEvidenceReranker(Protocol):
-    def rerank(
-        self,
-        query: str,
-        results: list[LegalEvidenceResult],
-    ) -> list[LegalEvidenceResult]: ...
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -89,9 +87,7 @@ def _apply_context(
     return statement
 
 
-def _base_query(
-    context: LegalReviewContext,
-) -> Select:
+def _base_query() -> Select:
     return select(LegalProvision, LegalSource).join(
         LegalSource,
         LegalSource.id == LegalProvision.legal_source_id,
@@ -143,7 +139,7 @@ def _collect_exact_article(
     if not article_number:
         return
     statement = _apply_context(
-        _base_query(context).where(LegalProvision.article_number == article_number),
+        _base_query().where(LegalProvision.article_number == article_number),
         context,
     ).limit(_MAX_CANDIDATES)
     for provision, source in db.execute(statement):
@@ -158,7 +154,7 @@ def _collect_keyword_matches(
     query: str,
 ) -> None:
     dialect_name = db.get_bind().dialect.name
-    base = _base_query(context)
+    base = _base_query()
     if dialect_name == "postgresql":
         document = func.to_tsvector("simple", LegalProvision.text)
         query_vector = func.plainto_tsquery("simple", query)
@@ -206,6 +202,69 @@ def _collect_keyword_matches(
         candidate.keyword_rank = rank
 
 
+def _collect_bm25_matches(
+    db: Session,
+    candidates: dict[UUID, _EvidenceCandidate],
+    context: LegalReviewContext,
+    query: str,
+) -> None:
+    query_terms = list(dict.fromkeys(_TOKEN_PATTERN.findall(query.lower())))
+    if not query_terms:
+        return
+
+    documents = list(db.execute(_apply_context(_base_query(), context)))
+    if not documents:
+        return
+
+    tokenized = [
+        _TOKEN_PATTERN.findall(provision.text.lower())
+        for provision, _ in documents
+    ]
+    document_frequencies = Counter(
+        term
+        for terms in tokenized
+        for term in set(terms)
+    )
+    average_length = sum(map(len, tokenized)) / len(tokenized) or 1.0
+    k1 = 1.5
+    b = 0.75
+    scored: list[tuple[float, LegalProvision, LegalSource]] = []
+
+    for (provision, source), terms in zip(documents, tokenized):
+        term_frequencies = Counter(terms)
+        document_length = len(terms)
+        score = 0.0
+        for term in query_terms:
+            frequency = term_frequencies[term]
+            if not frequency:
+                continue
+            inverse_document_frequency = math.log(
+                1.0
+                + (len(documents) - document_frequencies[term] + 0.5)
+                / (document_frequencies[term] + 0.5)
+            )
+            denominator = frequency + k1 * (
+                1.0 - b + b * document_length / average_length
+            )
+            score += (
+                inverse_document_frequency
+                * frequency
+                * (k1 + 1.0)
+                / denominator
+            )
+        if score > 0:
+            scored.append((score, provision, source))
+
+    scored.sort(key=lambda hit: (-hit[0], hit[1].article_number, str(hit[1].id)))
+    for rank, (score, provision, source) in enumerate(
+        scored[:_MAX_CANDIDATES],
+        start=1,
+    ):
+        candidate = _candidate(candidates, provision, source)
+        candidate.keyword_rank = rank
+        candidate.keyword_score = score
+
+
 def _collect_semantic_matches(
     db: Session,
     candidates: dict[UUID, _EvidenceCandidate],
@@ -248,7 +307,7 @@ def _collect_semantic_matches(
         ).cosine_distance(query_embedding)
         rows = db.execute(
             statement.add_columns(distance)
-            .order_by(distance.asc())
+            .order_by(distance.asc(), LegalProvisionChunk.id)
             .limit(_MAX_CANDIDATES)
         )
         semantic_hits = [
@@ -263,7 +322,9 @@ def _collect_semantic_matches(
                 continue
             score = _cosine_similarity(query_embedding, chunk.embedding)
             semantic_hits.append((chunk, provision, source, score))
-        semantic_hits.sort(key=lambda hit: hit[3], reverse=True)
+        semantic_hits.sort(
+            key=lambda hit: (-hit[3], str(hit[0].id))
+        )
 
     for rank, (chunk, provision, source, score) in enumerate(
         semantic_hits[:_MAX_CANDIDATES],
@@ -278,20 +339,37 @@ def _collect_semantic_matches(
             candidate.page_number = chunk.page_number
 
 
+def _rrf_score(
+    *,
+    exact_rank: Optional[int],
+    keyword_rank: Optional[int],
+    semantic_rank: Optional[int],
+    offset: int,
+) -> float:
+    score = 0.0
+    if exact_rank is not None:
+        score += 2.0 / (offset + exact_rank)
+    if keyword_rank is not None:
+        score += 1.0 / (offset + keyword_rank)
+    if semantic_rank is not None:
+        score += 1.0 / (offset + semantic_rank)
+    return score
+
+
 def _make_results(
     candidates: dict[UUID, _EvidenceCandidate],
     review_context: LegalReviewContext,
+    rrf_offset: int,
 ) -> list[LegalEvidenceResult]:
     results: list[LegalEvidenceResult] = []
     for candidate in candidates.values():
         source = candidate.source
-        combined_score = 0.0
-        if candidate.exact_rank is not None:
-            combined_score += 2.0 / (_RRF_OFFSET + candidate.exact_rank)
-        if candidate.keyword_rank is not None:
-            combined_score += 1.0 / (_RRF_OFFSET + candidate.keyword_rank)
-        if candidate.semantic_rank is not None:
-            combined_score += 1.0 / (_RRF_OFFSET + candidate.semantic_rank)
+        combined_score = _rrf_score(
+            exact_rank=candidate.exact_rank,
+            keyword_rank=candidate.keyword_rank,
+            semantic_rank=candidate.semantic_rank,
+            offset=rrf_offset,
+        )
 
         status_is_uncertain = source.legal_status != "current"
         date_is_uncertain = source.effective_date is None
@@ -332,6 +410,7 @@ def _make_results(
             result.retrieval_scores.combined,
             result.retrieval_scores.semantic,
             result.article_number,
+            str(result.provision_id),
         ),
         reverse=True,
     )
@@ -345,6 +424,10 @@ def retrieve_legal_evidence(
     db: Session,
     embedding_provider: Optional[EmbeddingProvider] = None,
     reranker: Optional[LegalEvidenceReranker] = None,
+    retrieval_mode: Optional[Literal["baseline", "hybrid"]] = None,
+    candidate_k: Optional[int] = None,
+    rerank: Optional[bool] = None,
+    settings: Optional[Settings] = None,
 ) -> LegalRetrievalResponse:
     normalized_query = query.strip()
     if not normalized_query:
@@ -352,13 +435,26 @@ def retrieve_legal_evidence(
     if top_k < 1 or top_k > 100:
         raise ValueError("top_k must be between 1 and 100.")
 
+    current_settings = settings or get_settings()
+    mode = retrieval_mode or current_settings.legal_retrieval_mode
+    candidate_limit = (
+        candidate_k
+        if candidate_k is not None
+        else current_settings.legal_retrieval_candidate_k
+    )
+    if not 1 <= candidate_limit <= _MAX_CANDIDATES:
+        raise ValueError(f"candidate_k must be between 1 and {_MAX_CANDIDATES}.")
+
     context = review_context or LegalReviewContext()
     candidates: dict[UUID, _EvidenceCandidate] = {}
     article_number = _query_article_number(normalized_query, context)
     _collect_exact_article(db, candidates, context, article_number)
-    _collect_keyword_matches(db, candidates, context, normalized_query)
+    if mode == "hybrid":
+        _collect_bm25_matches(db, candidates, context, normalized_query)
+    else:
+        _collect_keyword_matches(db, candidates, context, normalized_query)
 
-    provider = embedding_provider or get_embedding_provider()
+    provider = embedding_provider or get_embedding_provider(current_settings)
     if provider is not None:
         _collect_semantic_matches(
             db,
@@ -368,13 +464,34 @@ def retrieve_legal_evidence(
             provider,
         )
 
-    results = _make_results(candidates, context)
+    results = _make_results(
+        candidates,
+        context,
+        current_settings.legal_retrieval_rrf_offset,
+    )
+    reranking_enabled = (
+        mode == "hybrid" and current_settings.legal_reranker_enabled
+        if rerank is None
+        else rerank
+    )
+    if reranker is None and reranking_enabled:
+        reranker = get_legal_evidence_reranker(current_settings)
+    results = results[:candidate_limit]
+    reranker_applied = False
     if reranker is not None and results:
-        results = reranker.rerank(normalized_query, results)
+        try:
+            results = reranker.rerank(normalized_query, results)
+            reranker_applied = True
+        except Exception as exc:
+            logger.warning(
+                "Cross-encoder reranking failed; using fused retrieval order",
+                extra={"error_type": type(exc).__name__},
+            )
     return LegalRetrievalResponse(
         query=normalized_query,
         review_context=context,
         embedding_model=provider.model_name if provider else None,
         embedding_version=provider.model_version if provider else None,
+        reranker_applied=reranker_applied,
         results=results[:top_k],
     )

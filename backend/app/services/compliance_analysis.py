@@ -130,7 +130,10 @@ def _validate_citations(
             result is None
             or result.source_id != citation.source_id
             or result.article_number != citation.article_number
-            or result.sub_article_reference != citation.sub_article_reference
+            or (
+                result.sub_article_reference is not None
+                and result.sub_article_reference != citation.sub_article_reference
+            )
             or not result.authoritative
             or result.applicability_uncertain
         ):
@@ -144,7 +147,10 @@ def _validate_citations(
             provision is None
             or provision.legal_source_id != citation.source_id
             or provision.article_number != citation.article_number
-            or provision.sub_article_reference != citation.sub_article_reference
+            or (
+                provision.sub_article_reference is not None
+                and provision.sub_article_reference != citation.sub_article_reference
+            )
         ):
             raise ValueError("Citation does not match the saved provision.")
         source = db.scalar(

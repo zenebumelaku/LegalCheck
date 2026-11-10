@@ -41,6 +41,17 @@ class Settings(BaseSettings):
         max_length=255,
     )
     embedding_model_version: str = Field(default="v1", min_length=1, max_length=100)
+    legal_retrieval_mode: Literal["baseline", "hybrid"] = "hybrid"
+    legal_retrieval_candidate_k: int = Field(default=20, gt=0, le=250)
+    legal_retrieval_rrf_offset: int = Field(default=60, gt=0, le=1000)
+    legal_qa_top_k: int = Field(default=5, gt=0, le=100)
+    legal_reranker_enabled: bool = False
+    legal_reranker_model_path: Optional[Path] = None
+    legal_reranker_model_version: str = Field(
+        default="v1",
+        min_length=1,
+        max_length=100,
+    )
     llm_provider: Literal[
         "disabled",
         "openai_compatible",
@@ -80,6 +91,11 @@ class Settings(BaseSettings):
     @field_validator("embedding_local_model_path", mode="before")
     @classmethod
     def empty_embedding_model_path_is_unset(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @field_validator("legal_reranker_model_path", mode="before")
+    @classmethod
+    def empty_reranker_model_path_is_unset(cls, value: object) -> object:
         return None if value == "" else value
 
     @field_validator(

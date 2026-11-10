@@ -110,7 +110,10 @@ def _validate_citations(
             result is None
             or result.source_id != citation.source_id
             or result.article_number != citation.article_number
-            or result.sub_article_reference != citation.sub_article_reference
+            or (
+                result.sub_article_reference is not None
+                and result.sub_article_reference != citation.sub_article_reference
+            )
             or not result.authoritative
             or result.applicability_uncertain
             or _normalized_text(citation.supporting_quote)
@@ -133,7 +136,10 @@ def _validate_citations(
             or source is None
             or provision.legal_source_id != source.id
             or provision.article_number != citation.article_number
-            or provision.sub_article_reference != citation.sub_article_reference
+            or (
+                provision.sub_article_reference is not None
+                and provision.sub_article_reference != citation.sub_article_reference
+            )
             or _normalized_text(citation.supporting_quote)
             not in _normalized_text(provision.text)
             or not source.eligible_for_findings
@@ -156,7 +162,8 @@ def _validate_citations(
                 source_url=source.original_source_url,
                 provision_id=provision.id,
                 article_number=provision.article_number,
-                sub_article_reference=provision.sub_article_reference,
+                sub_article_reference=citation.sub_article_reference
+                or provision.sub_article_reference,
                 page_number=result.page_number or provision.page_number,
                 supporting_quote=citation.supporting_quote,
             )
@@ -175,11 +182,12 @@ def answer_legal_question(
     embedding_provider: Optional[EmbeddingProvider] = None,
     answer_cache: Optional[LegalQuestionCache] = None,
     settings: Optional[Settings] = None,
-    top_k: int = 5,
+    top_k: Optional[int] = None,
     generation_context: Optional[str] = None,
     cache_scope: Optional[str] = None,
 ) -> LegalQuestionAnswer:
     current_settings = settings or get_settings()
+    answer_top_k = top_k if top_k is not None else current_settings.legal_qa_top_k
     normalized_question = normalize_legal_question(question)
     if not normalized_question:
         raise ValueError("question must not be blank.")
@@ -191,7 +199,7 @@ def answer_legal_question(
     context = (review_context or LegalReviewContext()).model_copy(
         update={"review_date": review_date, "include_unverified": False}
     )
-    if not 1 <= top_k <= 100:
+    if not 1 <= answer_top_k <= 100:
         raise ValueError("top_k must be between 1 and 100.")
 
     cache_available = False
@@ -208,7 +216,7 @@ def answer_legal_question(
                 question=normalized_question,
                 context={
                     "review_context": context.model_dump(mode="json"),
-                    "top_k": top_k,
+                    "top_k": answer_top_k,
                     "cache_scope": cache_scope,
                     "private_context_digest": (
                         hashlib.sha256(generation_context.encode("utf-8")).hexdigest()
@@ -243,15 +251,16 @@ def answer_legal_question(
     retrieval = retrieve_legal_evidence(
         contextual_question,
         context,
-        100,
+        current_settings.legal_retrieval_candidate_k,
         db=db,
         embedding_provider=embedding_provider,
+        settings=current_settings,
     )
     eligible_results = [
         result
         for result in retrieval.results
         if result.authoritative and not result.applicability_uncertain
-    ][:top_k]
+    ][:answer_top_k]
 
     if not eligible_results:
         return LegalQuestionAnswer(

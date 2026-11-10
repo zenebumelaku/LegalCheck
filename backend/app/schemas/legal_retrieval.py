@@ -51,6 +51,7 @@ class LegalRetrievalResponse(BaseModel):
     review_context: LegalReviewContext
     embedding_model: Optional[str]
     embedding_version: Optional[str]
+    reranker_applied: bool = False
     results: list[LegalEvidenceResult]
 
 

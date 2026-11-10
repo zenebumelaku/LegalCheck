@@ -395,6 +395,14 @@ def test_knowledge_base_changes_invalidate_previous_answer(
 def test_cache_key_includes_explicit_cache_version_and_normalizes_question() -> None:
     settings_v1 = Settings(legal_qa_cache_version="v1")
     settings_v2 = Settings(legal_qa_cache_version="v2")
+    hybrid_settings = Settings(
+        legal_qa_cache_version="v1",
+        legal_retrieval_mode="hybrid",
+        legal_retrieval_candidate_k=40,
+        legal_reranker_enabled=True,
+        legal_reranker_model_path="var/models/legal-cross-encoder",
+        legal_reranker_model_version="competition-v2",
+    )
     common = {
         "context": {"jurisdiction": "ET", "review_date": "2024-01-01"},
         "knowledge_base_version": "synthetic-kb-v1",
@@ -415,9 +423,15 @@ def test_cache_key_includes_explicit_cache_version_and_normalizes_question() -> 
         settings=settings_v2,
         **common,
     )
+    hybrid_key = legal_question_cache_key(
+        question="What is the rule?",
+        settings=hybrid_settings,
+        **common,
+    )
 
     assert first_key == normalized_key
     assert first_key != next_version_key
+    assert first_key != hybrid_key
 
 
 def test_cache_key_includes_effective_legal_qa_provider() -> None:
