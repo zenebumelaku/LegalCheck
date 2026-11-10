@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, ChevronRight, Menu, Shield } from 'lucide-react';
+import { MessageSquareText, ChevronRight, Menu, Shield } from 'lucide-react';
 import { User } from '../../types';
 
 interface DashboardHeaderProps {
@@ -18,9 +18,6 @@ export function DashboardHeader({
   // Compute breadcrumbs
   const getBreadcrumbs = () => {
     if (currentPath === '/dashboard') return ['Dashboard', 'Overview'];
-    if (currentPath === '/audits/new') return ['Audits', 'New Audit'];
-    if (currentPath === '/audits') return ['Audits', 'Audit History'];
-    if (currentPath.startsWith('/audits/')) return ['Audits', 'Audit Results'];
     if (currentPath === '/legal-sources') return ['Legal Library', 'Proclamations'];
     if (currentPath.startsWith('/legal-sources/')) return ['Legal Library', 'Source Details'];
     if (currentPath === '/legal-chat') return ['Legal AI', 'Chat'];
@@ -63,13 +60,13 @@ export function DashboardHeader({
           <span className="font-medium text-slate-700">{currentUser?.organization || 'No organization'}</span>
         </div>
 
-        {currentPath !== '/audits/new' && (
+        {currentPath !== '/legal-chat' && (
           <button
-            onClick={() => onNavigate('/audits/new')}
+            onClick={() => onNavigate('/legal-chat')}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shadow-xs"
           >
-            <Plus className="w-3.5 h-3.5" />
-            <span>New Audit</span>
+            <MessageSquareText className="w-3.5 h-3.5" />
+            <span>Ask a question</span>
           </button>
         )}
       </div>

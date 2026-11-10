@@ -403,6 +403,10 @@ def test_cache_key_includes_explicit_cache_version_and_normalizes_question() -> 
         legal_reranker_model_path="var/models/legal-cross-encoder",
         legal_reranker_model_version="competition-v2",
     )
+    different_embedding_model = Settings(
+        embedding_provider="sentence_transformers",
+        embedding_local_model_path="var/models/alternate-embedding-model",
+    )
     common = {
         "context": {"jurisdiction": "ET", "review_date": "2024-01-01"},
         "knowledge_base_version": "synthetic-kb-v1",
@@ -428,10 +432,16 @@ def test_cache_key_includes_explicit_cache_version_and_normalizes_question() -> 
         settings=hybrid_settings,
         **common,
     )
+    different_model_key = legal_question_cache_key(
+        question="What is the rule?",
+        settings=different_embedding_model,
+        **common,
+    )
 
     assert first_key == normalized_key
     assert first_key != next_version_key
     assert first_key != hybrid_key
+    assert first_key != different_model_key
 
 
 def test_cache_key_includes_effective_legal_qa_provider() -> None:

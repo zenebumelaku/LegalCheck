@@ -268,6 +268,11 @@ def legal_question_cache_key(
         "llm_model_version": settings.llm_model_version,
         "embedding_provider": settings.embedding_provider,
         "embedding_api_url": settings.embedding_api_url,
+        "embedding_local_model_path": (
+            str(settings.embedding_local_model_path)
+            if settings.embedding_local_model_path
+            else None
+        ),
         "embedding_model_name": settings.embedding_model_name,
         "embedding_model_version": settings.embedding_model_version,
         "retrieval_mode": settings.legal_retrieval_mode,

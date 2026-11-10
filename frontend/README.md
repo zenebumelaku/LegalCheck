@@ -2,19 +2,35 @@
 
 Frontend for the LegalCheck Ethiopia application. It connects to the existing
 FastAPI backend for authentication, legal questions, legal-source records, and
-contract audits. The repository does not include a verified legal corpus;
-displayed legal results depend on source records that have been independently
-verified and made eligible in the backend.
+source-grounded legal research actions. The repository does not include a
+verified legal corpus; displayed legal results depend on source records that
+have been independently verified and made eligible in the backend.
 
 ---
 
 ## Key Features
 
-The frontend includes the legal Q&A page, audit and document flows, legal-source
-views, and opt-in synthetic demo screens. Backend API responses are distinct
-from the demo-only client-side rules. Demo output is illustrative and must not
-be treated as verified legal analysis. Actual source availability, authority,
-and applicability are determined by backend source records and review status.
+The frontend includes the legal Q&A page, legal-source views, and workspace
+settings. Backend API responses are distinct from any demo or sample content.
+Demo output is illustrative and must not be treated as verified legal
+analysis. Actual source availability, authority, and applicability are
+determined by backend source records and review status.
+
+The backend combines semantic and keyword retrieval, then applies configured
+reranking before answer generation. It validates citations against eligible
+evidence and caches successful answers with their source references in Redis;
+valid cache hits return the answer and references without repeating retrieval
+or generation. Hybrid retrieval is the default. Cross-encoder reranking is
+opt-in and requires `LEGAL_RERANKER_ENABLED=true` with a configured local model
+at `LEGAL_RERANKER_MODEL_PATH`; when it is unavailable, retrieval keeps the
+hybrid-fused ordering. Cache keys account for knowledge-base content and the
+answer and retrieval settings, including reranker configuration.
+
+The local development configuration has hybrid retrieval and Redis caching
+enabled. Cross-encoder reranking is optional and is only applied when a local
+reranker model is configured; otherwise candidates retain their hybrid fused
+ranking. A competition deployment that requires cross-encoder reranking must
+provide and configure that model before claiming reranking is active.
 
 ---
 
@@ -57,7 +73,8 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
-Enable the legacy demo-only local analysis path only when you intentionally want offline sample data and client-side auditing:
+Enable the legacy demo-only local analysis path only when you intentionally want
+offline sample data for UI testing:
 ```env
 NEXT_PUBLIC_ENABLE_DEMO_FALLBACK=true
 # or

@@ -9,8 +9,8 @@ interface AuthPageProps {
 }
 
 export function LoginPage({ onNavigate, onAuthSuccess }: AuthPageProps) {
-  const [email, setEmail] = useState('compliance@addistech.et');
-  const [password, setPassword] = useState('EthioLegal2026!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -48,7 +48,7 @@ export function LoginPage({ onNavigate, onAuthSuccess }: AuthPageProps) {
             Sign In to LegalCheck Ethiopia
           </h1>
           <p className="mt-1.5 text-xs text-slate-500">
-            Authorized compliance portal for Ethiopian commercial entities
+            Sign in to your source-backed legal research workspace.
           </p>
         </div>
 
@@ -193,10 +193,10 @@ export function RegisterPage({ onNavigate, onAuthSuccess }: AuthPageProps) {
             <ShieldCheck className="w-6 h-6 text-emerald-400" />
           </div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900">
-            Create Enterprise Compliance Account
+            Create a LegalCheck Account
           </h1>
           <p className="mt-1.5 text-xs text-slate-500">
-            Register your organization for automated Ethiopian Labour Law auditing
+            Ask Ethiopian labour-law questions and explore cited legal sources.
           </p>
         </div>
 

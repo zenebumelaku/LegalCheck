@@ -18,9 +18,6 @@ import { Footer } from './components/layout/Footer';
 import { LandingPage } from './views/LandingPage';
 import { LoginPage, RegisterPage, ForgotPasswordPage } from './views/AuthPages';
 import { DashboardPage } from './views/DashboardPage';
-import { NewAuditPage } from './views/NewAuditPage';
-import { AuditHistoryPage } from './views/AuditHistoryPage';
-import { AuditDetailPage } from './views/AuditDetailPage';
 import { LegalSourcesPage } from './views/LegalSourcesPage';
 import { LegalChatPage } from './views/LegalChatPage';
 import { SettingsPage, ProfilePage } from './views/SettingsPages';
@@ -30,6 +27,12 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
+
+  useEffect(() => {
+    if (path.startsWith('/audits')) {
+      navigate('/legal-chat');
+    }
+  }, [navigate, path]);
 
   useEffect(() => {
     async function initUser() {
@@ -62,9 +65,6 @@ export default function App() {
     path === '/legal-chat' ||
     path.startsWith('/settings') ||
     path.startsWith('/profile');
-
-  // Match audit detail route: /audits/:id
-  const auditDetailMatch = path.match(/^\/audits\/([^/]+)$/);
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans">
@@ -118,17 +118,12 @@ export default function App() {
               {path === '/dashboard' && (
                 <DashboardPage onNavigate={navigate} currentUser={currentUser} />
               )}
-              {path === '/audits/new' && <NewAuditPage onNavigate={navigate} />}
-              {path === '/audits' && <AuditHistoryPage onNavigate={navigate} />}
               {path === '/legal-chat' && (
                 <LegalChatPage
                   currentUser={currentUser}
                   isAuthChecking={isAuthChecking}
                   onNavigate={navigate}
                 />
-              )}
-              {auditDetailMatch && (
-                <AuditDetailPage auditId={auditDetailMatch[1]} onNavigate={navigate} />
               )}
               {path === '/settings' && (
                 <SettingsPage

@@ -335,8 +335,9 @@ def _collect_semantic_matches(
             candidate.semantic_rank = rank
             candidate.semantic_score = max(-1.0, min(1.0, score))
             candidate.chunk_id = chunk.id
-            candidate.text = chunk.chunk_text
-            candidate.page_number = chunk.page_number
+            if candidate.keyword_score == 0 and candidate.exact_rank is None:
+                candidate.text = chunk.chunk_text
+                candidate.page_number = chunk.page_number
 
 
 def _rrf_score(

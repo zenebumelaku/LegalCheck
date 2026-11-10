@@ -1,9 +1,6 @@
 import React from 'react';
 import {
   LayoutDashboard,
-  FileCheck2,
-  FilePlus2,
-  BookOpen,
   Settings,
   User as UserIcon,
   LogOut,
@@ -39,11 +36,6 @@ export function AppSidebar({
       icon: MessageSquareText
     },
     {
-      label: 'Legal Sources',
-      path: '/legal-sources',
-      icon: BookOpen
-    },
-    {
       label: 'Settings',
       path: '/settings',
       icon: Settings
@@ -68,7 +60,7 @@ export function AppSidebar({
           </div>
           <div className="truncate">
             <div className="font-serif-legal text-xs font-bold text-white tracking-wider">LEGALCHECK</div>
-            <div className="text-[10px] text-amber-400/90 font-medium tracking-widest uppercase">Ethiopia Compliance</div>
+            <div className="text-[10px] text-amber-400/90 font-medium tracking-widest uppercase">Ethiopian Legal RAG</div>
           </div>
         </button>
       </div>
@@ -102,12 +94,6 @@ export function AppSidebar({
             </button>
           );
         })}
-      </div>
-
-      {/* Legal source availability */}
-      <div className="p-3 mx-3 mb-3 rounded-lg bg-slate-800/60 border border-slate-800 text-[11px] text-slate-400">
-        <div className="font-semibold text-slate-300 mb-1">Legal sources</div>
-        <div>Availability depends on reviewed backend records.</div>
       </div>
 
       {/* Current User & Logout */}

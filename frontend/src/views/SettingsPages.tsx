@@ -64,7 +64,7 @@ export function SettingsPage({
           Organization & Security Settings
         </h1>
         <p className="mt-1 text-xs sm:text-sm text-slate-500">
-          Manage contractual data retention cycles, privacy standards, and security controls.
+          Manage legal research data retention, privacy standards, and account security.
         </p>
       </div>
 
@@ -74,7 +74,7 @@ export function SettingsPage({
           <div>
             <h2 className="text-sm font-bold text-slate-900">Document Data Retention Window</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Specify how long uploaded contract excerpts and audit findings remain stored for your organization.
+              Set your preferred retention period for uploaded legal materials and question history.
             </p>
           </div>
           <Clock className="w-5 h-5 text-slate-400" />
@@ -85,7 +85,7 @@ export function SettingsPage({
             {[
               { days: 30, label: '30 Days', desc: 'Strict Privacy' },
               { days: 90, label: '90 Days', desc: 'Standard Corporate' },
-              { days: 365, label: '1 Year', desc: 'Annual Audit Cycle' },
+              { days: 365, label: '1 Year', desc: 'Annual Review' },
               { days: 0, label: 'Indefinite', desc: 'Manual Deletion' }
             ].map(opt => (
               <button
@@ -114,7 +114,7 @@ export function SettingsPage({
                   <span>Retention preferences saved.</span>
                 </span>
               ) : (
-                'Automatic archival runs according to your selected period.'
+                'Your selected retention preference is saved to your account.'
               )}
             </span>
             <button
@@ -134,7 +134,7 @@ export function SettingsPage({
           <div>
             <h2 className="text-sm font-bold text-slate-900">Change Authentication Password</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Update password credentials used to access enterprise compliance reports.
+              Update the password used to access your LegalCheck account.
             </p>
           </div>
           <KeyRound className="w-5 h-5 text-slate-400" />
@@ -197,14 +197,14 @@ export function SettingsPage({
         </form>
       </div>
 
-      {/* Compliance Disclaimer Acknowledgement */}
+      {/* Legal research limitations */}
       <div className="bg-slate-50 rounded-xl border border-slate-200 p-5 text-xs text-slate-600 space-y-2">
         <div className="font-bold text-slate-900 flex items-center gap-1.5">
           <ShieldCheck className="w-4 h-4 text-emerald-700" />
-          <span>Statutory Compliance Architecture</span>
+          <span>Legal research limitations</span>
         </div>
         <p className="leading-relaxed">
-          LegalCheck Ethiopia strictly uses deterministic checks mapped to Federal Negarit Gazeta Proclamation No. 1156/2019 and relevant Civil Code sections. Reports are for internal enterprise risk analysis and do not replace representation by certified Ethiopian advocates.
+          LegalCheck retrieves passages from its configured legal-source library and presents AI-generated answers with citations when the available evidence supports them. Source coverage and applicability may vary. This service is not legal advice; consult a qualified Ethiopian legal professional about your circumstances.
         </p>
       </div>
     </div>
@@ -303,7 +303,7 @@ export function ProfilePage({
               <input
                 type="email"
                 disabled
-                value={currentUser?.email || 'compliance@addistech.et'}
+                value={currentUser?.email || 'No email available'}
                 className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 text-slate-500 cursor-not-allowed"
               />
             </div>

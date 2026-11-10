@@ -120,6 +120,30 @@ def _quote_in_text(quote: str, text: str) -> bool:
     return False
 
 
+def _result_is_eligible(db: Session, result: LegalEvidenceResult) -> bool:
+    source = db.scalar(
+        select(LegalSource)
+        .where(LegalSource.id == result.source_id)
+        .execution_options(populate_existing=True)
+    )
+    provision = db.scalar(
+        select(LegalProvision)
+        .where(LegalProvision.id == result.provision_id)
+        .execution_options(populate_existing=True)
+    )
+    if source is None or provision is None:
+        return False
+    if provision.legal_source_id != source.id:
+        return False
+    if not result.authoritative or result.applicability_uncertain:
+        return False
+    if source.legal_status != "current" or not source.eligible_for_findings:
+        return False
+    if source.verification_status != "verified":
+        return False
+    return True
+
+
 def _validate_citations(
     citations: list[CitationReference],
     retrieved: dict[UUID, LegalEvidenceResult],
@@ -132,35 +156,36 @@ def _validate_citations(
     for citation in citations:
         result = retrieved.get(citation.provision_id)
         if result is None:
-            # Try matching by chunk_id or by source_id with quote
-            for res in retrieved.values():
-                if res.chunk_id == citation.provision_id or (
-                    res.source_id == citation.source_id
-                    and _quote_in_text(citation.supporting_quote, res.text)
-                ):
-                    result = res
-                    break
-
-        if result is None:
             continue
-
-        if not result.authoritative or result.applicability_uncertain:
+        if citation.source_id != result.source_id:
+            continue
+        if citation.provision_id != result.provision_id:
+            continue
+        if not _result_is_eligible(db, result):
             continue
 
         quote_matches = _quote_in_text(citation.supporting_quote, result.text)
-        art_matches = (
-            result.article_number == citation.article_number
-            or _normalize_ref(result.article_number) == _normalize_ref(citation.article_number)
-            or not citation.article_number
-        )
-        if not quote_matches or not art_matches:
-            continue
-
         provision = db.scalar(
             select(LegalProvision)
             .where(LegalProvision.id == result.provision_id)
             .execution_options(populate_existing=True)
         )
+        if provision is None:
+            continue
+        art_matches = (
+            result.article_number == citation.article_number
+            or _normalize_ref(result.article_number) == _normalize_ref(citation.article_number)
+            or not citation.article_number
+        )
+        sub_article_matches = (
+            not citation.sub_article_reference
+            or citation.sub_article_reference == provision.sub_article_reference
+            or _normalize_ref(citation.sub_article_reference)
+            == _normalize_ref(provision.sub_article_reference)
+        )
+        if not quote_matches or not art_matches or not sub_article_matches:
+            continue
+
         source = db.scalar(
             select(LegalSource)
             .where(LegalSource.id == result.source_id)
@@ -168,10 +193,6 @@ def _validate_citations(
         )
         if provision is None or source is None or provision.legal_source_id != source.id:
             continue
-
-        if not source.eligible_for_findings or source.verification_status != "verified":
-            continue
-
         if provision.id in seen:
             continue
 
@@ -340,6 +361,17 @@ def answer_legal_question(
         ) from exc
 
     if parsed.evidence_assessment != "supporting" or not parsed.citations:
+        return LegalQuestionAnswer(
+            status="insufficient_evidence",
+            question=normalized_question,
+            answer=_INVALID_SUPPORT_ANSWER,
+            review_date=review_date,
+            citations=[],
+            model_name=provider.model_name,
+            model_version=provider.model_version,
+        )
+
+    if not all(_result_is_eligible(db, result) for result in eligible_results):
         return LegalQuestionAnswer(
             status="insufficient_evidence",
             question=normalized_question,

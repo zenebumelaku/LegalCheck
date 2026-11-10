@@ -406,6 +406,67 @@ def test_rrf_combines_keyword_and_vector_ranks_and_deduplicates_provisions(
     }
 
 
+def test_hybrid_retrieval_keeps_keyword_evidence_when_vector_selects_other_chunk(
+    db_session: Session,
+) -> None:
+    source = _add_source(
+        db_session,
+        version="synthetic-mixed-evidence-v1",
+        provisions=[
+            (
+                "mixed-evidence",
+                "The employer may deduct amounts for documented damage only. "
+                + ("First passage background. " * 80)
+                + "\n\n"
+                + "Second passage contains unrelated leave details. "
+                + ("Unrelated schedule information. " * 80),
+            )
+        ],
+    )
+
+    class MismatchedEmbeddingProvider(SyntheticTestEmbeddingProvider):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            self.calls.append(list(texts))
+            vectors = []
+            for text in texts:
+                vector = [0.0] * self.dimensions
+                if text.strip() == "employer may deduct amounts" or (
+                    "Second passage contains unrelated leave details" in text
+                ):
+                    vector[0] = 1.0
+                else:
+                    vector[1] = 1.0
+                vectors.append(vector)
+            return vectors
+
+    provider = MismatchedEmbeddingProvider()
+    generate_embeddings_for_source(db_session, source, provider)
+    provision = source.provisions[0]
+    chunks = db_session.scalars(
+        select(LegalProvisionChunk)
+        .where(LegalProvisionChunk.provision_id == provision.id)
+        .order_by(LegalProvisionChunk.chunk_index)
+    ).all()
+    assert len(chunks) == 2
+    assert "deduct amounts" in chunks[0].chunk_text
+    assert "deduct amounts" not in chunks[1].chunk_text
+
+    response = retrieve_legal_evidence(
+        "employer may deduct amounts",
+        LegalReviewContext(jurisdiction="ET"),
+        5,
+        db=db_session,
+        embedding_provider=provider,
+        settings=Settings(legal_retrieval_mode="hybrid"),
+    )
+
+    result = next(item for item in response.results if item.provision_id == provision.id)
+    assert result.retrieval_scores.keyword > 0
+    assert result.retrieval_scores.semantic > 0
+    assert result.chunk_id == chunks[1].id
+    assert "The employer may deduct amounts for documented damage only." in result.text
+
+
 def test_rrf_score_uses_reciprocal_ranks() -> None:
     assert _rrf_score(
         exact_rank=1,

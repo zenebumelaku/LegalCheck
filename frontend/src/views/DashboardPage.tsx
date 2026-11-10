@@ -124,13 +124,7 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
       {/* Welcome Header */}
       <div className="bg-slate-900 text-white rounded-2xl p-6 sm:p-8 shadow-sm border border-slate-800 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-400 border border-emerald-500/30">
-              <Zap className="h-3 w-3 fill-emerald-400" />
-              Redis + Vector RAG
-            </span>
-            <span className="text-xs text-slate-400">All-in-One Document Q&A</span>
-          </div>
+         
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
             {currentUser ? `Welcome back, ${currentUser.fullName}` : 'Document AI Assistant'}
           </h1>
@@ -141,13 +135,7 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
           </p>
         </div>
 
-        <button
-          onClick={() => onNavigate('/legal-chat')}
-          className="inline-flex items-center justify-center gap-2 px-5 py-3 text-sm font-bold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl shadow-md transition-all shrink-0 hover:scale-[1.02]"
-        >
-          <MessageSquareText className="w-4 h-4 text-slate-950" />
-          <span>Open Q&A Chat</span>
-        </button>
+        
       </div>
 
       {/* Primary Actions: Search & Quick Ask */}
