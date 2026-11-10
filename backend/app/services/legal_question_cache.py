@@ -40,6 +40,8 @@ class LegalQuestionCache(Protocol):
         ttl_seconds: int,
     ) -> None: ...
 
+    def invalidate_all(self) -> int: ...
+
 
 class LegalQuestionCacheMetrics:
     def __init__(self) -> None:
@@ -155,6 +157,18 @@ class RedisLegalQuestionCache:
                 ttl_seconds,
                 answer.model_copy(update={"cache_hit": False}).model_dump_json(),
             )
+
+    def invalidate_all(self) -> int:
+        try:
+            keys = self._redis.keys(f"{_CACHE_KEY_PREFIX}:*")
+            if keys:
+                deleted = self._redis.delete(*keys)
+                logger.info("Invalidated %d cached legal-question answers from Redis", deleted)
+                return int(deleted)
+            return 0
+        except RedisError as exc:
+            logger.warning("Failed to invalidate Redis legal-question cache: %s", exc)
+            return 0
 
 
 def normalize_legal_question(question: str) -> str:

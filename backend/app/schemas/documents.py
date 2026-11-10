@@ -35,6 +35,7 @@ class DocumentUploadResponse(DocumentResponse):
     pages: List[ExtractedPageResponse]
     warnings: List[str]
     extracted_characters: int
+    chunks_created: int = 0
 
 
 class DocumentListResponse(BaseModel):

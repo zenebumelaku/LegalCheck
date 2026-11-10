@@ -62,13 +62,22 @@ export function DashboardPage({ onNavigate, currentUser }: DashboardPageProps) {
           </p>
         </div>
 
-        <button
-          onClick={() => onNavigate('/audits/new')}
-          className="inline-flex items-center justify-center gap-2 px-5 py-3 text-xs font-bold uppercase tracking-wider text-slate-900 bg-amber-400 hover:bg-amber-300 rounded shadow-md transition-colors shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>New Document Audit</span>
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2.5 shrink-0">
+          <button
+            onClick={() => onNavigate('/legal-chat')}
+            className="inline-flex items-center justify-center gap-2 px-4 py-3 text-xs font-bold uppercase tracking-wider text-white bg-emerald-800 hover:bg-emerald-700 rounded shadow-md transition-colors border border-emerald-600"
+          >
+            <BookOpen className="w-4 h-4 text-emerald-300" />
+            <span>RAG Q&A & Corpus</span>
+          </button>
+          <button
+            onClick={() => onNavigate('/audits/new')}
+            className="inline-flex items-center justify-center gap-2 px-4 py-3 text-xs font-bold uppercase tracking-wider text-slate-900 bg-amber-400 hover:bg-amber-300 rounded shadow-md transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Document Audit</span>
+          </button>
+        </div>
       </div>
 
       {/* Real Statistics Metric Cards */}

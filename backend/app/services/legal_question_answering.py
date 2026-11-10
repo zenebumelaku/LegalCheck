@@ -116,8 +116,8 @@ def _validate_citations(
             )
             or not result.authoritative
             or result.applicability_uncertain
-            or _normalized_text(citation.supporting_quote)
-            not in _normalized_text(result.text)
+            or _normalized_text(citation.supporting_quote).lower()
+            not in _normalized_text(result.text).lower()
         ):
             raise ValueError("Citation does not match eligible retrieved evidence.")
 
@@ -140,8 +140,8 @@ def _validate_citations(
                 provision.sub_article_reference is not None
                 and provision.sub_article_reference != citation.sub_article_reference
             )
-            or _normalized_text(citation.supporting_quote)
-            not in _normalized_text(provision.text)
+            or _normalized_text(citation.supporting_quote).lower()
+            not in _normalized_text(provision.text).lower()
             or not source.eligible_for_findings
             or source.verification_status != "verified"
             or source.legal_status != "current"

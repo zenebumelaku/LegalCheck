@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from typing import Optional, Protocol
 from urllib.parse import quote
@@ -8,6 +9,8 @@ import httpx
 from app.core.config import Settings, get_settings
 from app.core.provider_http import post_bounded_json
 from app.core.provider_url import validate_provider_url
+
+logger = logging.getLogger(__name__)
 
 
 class LLMProviderError(RuntimeError):
@@ -259,8 +262,8 @@ class OllamaLLMProvider:
 
 class GeminiLLMProvider:
     _API_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-    _MAX_ATTEMPTS = 2
-    _RETRY_DELAY_SECONDS = 0.25
+    _MAX_ATTEMPTS = 6
+    _RETRY_DELAY_SECONDS = 2.0
 
     def __init__(self, settings: Settings) -> None:
         if not settings.llm_api_key:
@@ -400,7 +403,15 @@ class GeminiLLMProvider:
                 if not retryable or attempt + 1 >= self._MAX_ATTEMPTS:
                     raise
                 attempt += 1
-                time.sleep(self._RETRY_DELAY_SECONDS)
+                delay = self._RETRY_DELAY_SECONDS * (1.5 ** (attempt - 1))
+                logger.warning(
+                    "Gemini API transient failure (%s); retrying attempt %d/%d after %.1fs...",
+                    exc,
+                    attempt,
+                    self._MAX_ATTEMPTS,
+                    delay,
+                )
+                time.sleep(delay)
 
 
 def get_llm_provider(settings: Optional[Settings] = None) -> LLMProvider:

@@ -433,7 +433,7 @@ class LegalSource(Base):
             and self.source_file_storage_key is not None
             and self.verified_by is not None
             and self.verified_at is not None
-            and self.original_source_url is not None
+            and (self.original_source_url is not None or self.source_type == "uploaded_document")
         )
 
 

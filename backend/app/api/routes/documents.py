@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_user, get_organization_membership
 from app.core.config import settings
 from app.core.rate_limit import enforce_upload_rate_limit
-from app.db.models import Document, OrganizationMembership, User
+from app.db.models import Document, LegalProvision, LegalProvisionChunk, LegalSource, OrganizationMembership, User
 from app.db.session import get_db
 from app.schemas.documents import (
     DocumentListResponse,
@@ -28,6 +28,8 @@ from app.services.document_extraction import (
     UnsupportedDocumentError,
     extract_document,
 )
+from app.services.document_ingestion import ingest_document_to_vector_store
+from app.services.legal_question_cache import get_legal_question_cache
 from app.storage.interface import PrivateFileStorage, get_private_storage
 
 logger = logging.getLogger(__name__)
@@ -224,7 +226,11 @@ def upload_document(
         processing_status="warning" if extraction.warnings else "completed",
     )
     db.add(document)
+    db.flush()
+
+    chunks_created = 0
     try:
+        chunks_created = ingest_document_to_vector_store(db, document, extraction)
         db.commit()
     except Exception:
         db.rollback()
@@ -251,6 +257,7 @@ def upload_document(
         ],
         warnings=extraction.warnings,
         extracted_characters=extraction.extracted_characters,
+        chunks_created=chunks_created,
     )
 
 
@@ -328,7 +335,32 @@ def delete_document(
     storage_key = document.storage_key
     document.deleted_at = datetime.now(timezone.utc)
     document.processing_status = "deleted"
+
+    # Remove associated LegalSource and chunks from RAG knowledge base
+    associated_source = db.scalar(
+        select(LegalSource).where(
+            (LegalSource.source_file_storage_key == storage_key)
+            | (LegalSource.file_checksum == document.checksum)
+        )
+    )
+    if associated_source is not None:
+        provisions = db.scalars(
+            select(LegalProvision).where(LegalProvision.legal_source_id == associated_source.id)
+        ).all()
+        for prov in provisions:
+            db.query(LegalProvisionChunk).filter(LegalProvisionChunk.provision_id == prov.id).delete()
+            db.delete(prov)
+        db.delete(associated_source)
+
     db.commit()
+
+    # Invalidate Redis cache
+    try:
+        cache = get_legal_question_cache()
+        cache.invalidate_all()
+    except Exception as exc:
+        logger.warning("Failed to invalidate Redis cache after document deletion: %s", exc)
+
     try:
         storage.delete(storage_key)
     except OSError as exc:

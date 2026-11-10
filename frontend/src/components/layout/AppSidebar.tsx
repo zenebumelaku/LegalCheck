@@ -34,6 +34,16 @@ export function AppSidebar({
       exact: true
     },
     {
+      label: 'RAG Q&A & Corpus',
+      path: '/legal-chat',
+      icon: MessageSquareText
+    },
+    {
+      label: 'Legal Sources',
+      path: '/legal-sources',
+      icon: BookOpen
+    },
+    {
       label: 'New Audit',
       path: '/audits/new',
       icon: FilePlus2
@@ -43,16 +53,6 @@ export function AppSidebar({
       path: '/audits',
       icon: FileCheck2,
       exact: true
-    },
-    {
-      label: 'Legal Sources',
-      path: '/legal-sources',
-      icon: BookOpen
-    },
-    {
-      label: 'Legal AI Chat',
-      path: '/legal-chat',
-      icon: MessageSquareText
     },
     {
       label: 'Settings',
