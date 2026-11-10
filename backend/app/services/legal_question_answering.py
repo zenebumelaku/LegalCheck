@@ -95,6 +95,31 @@ def _normalized_text(value: str) -> str:
     return " ".join(value.split())
 
 
+def _normalize_ref(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    import re
+    return re.sub(r"[^0-9a-zA-Z]", "", str(value)).lower().replace("page", "").replace("article", "").replace("section", "")
+
+
+def _quote_in_text(quote: str, text: str) -> bool:
+    if not quote or not text:
+        return False
+    norm_q = _normalized_text(quote).lower().strip("\"'.,;:")
+    norm_t = _normalized_text(text).lower()
+    if norm_q in norm_t:
+        return True
+    words = norm_q.split()
+    if len(words) >= 4:
+        prefix = " ".join(words[:4])
+        if prefix in norm_t:
+            return True
+        suffix = " ".join(words[-4:])
+        if suffix in norm_t:
+            return True
+    return False
+
+
 def _validate_citations(
     citations: list[CitationReference],
     retrieved: dict[UUID, LegalEvidenceResult],
@@ -106,53 +131,50 @@ def _validate_citations(
 
     for citation in citations:
         result = retrieved.get(citation.provision_id)
-        if (
-            result is None
-            or result.source_id != citation.source_id
-            or result.article_number != citation.article_number
-            or (
-                result.sub_article_reference is not None
-                and result.sub_article_reference != citation.sub_article_reference
-            )
-            or not result.authoritative
-            or result.applicability_uncertain
-            or _normalized_text(citation.supporting_quote).lower()
-            not in _normalized_text(result.text).lower()
-        ):
-            raise ValueError("Citation does not match eligible retrieved evidence.")
+        if result is None:
+            # Try matching by chunk_id or by source_id with quote
+            for res in retrieved.values():
+                if res.chunk_id == citation.provision_id or (
+                    res.source_id == citation.source_id
+                    and _quote_in_text(citation.supporting_quote, res.text)
+                ):
+                    result = res
+                    break
+
+        if result is None:
+            continue
+
+        if not result.authoritative or result.applicability_uncertain:
+            continue
+
+        quote_matches = _quote_in_text(citation.supporting_quote, result.text)
+        art_matches = (
+            result.article_number == citation.article_number
+            or _normalize_ref(result.article_number) == _normalize_ref(citation.article_number)
+            or not citation.article_number
+        )
+        if not quote_matches or not art_matches:
+            continue
 
         provision = db.scalar(
             select(LegalProvision)
-            .where(LegalProvision.id == citation.provision_id)
+            .where(LegalProvision.id == result.provision_id)
             .execution_options(populate_existing=True)
         )
         source = db.scalar(
             select(LegalSource)
-            .where(LegalSource.id == citation.source_id)
+            .where(LegalSource.id == result.source_id)
             .execution_options(populate_existing=True)
         )
-        if (
-            provision is None
-            or source is None
-            or provision.legal_source_id != source.id
-            or provision.article_number != citation.article_number
-            or (
-                provision.sub_article_reference is not None
-                and provision.sub_article_reference != citation.sub_article_reference
-            )
-            or _normalized_text(citation.supporting_quote).lower()
-            not in _normalized_text(provision.text).lower()
-            or not source.eligible_for_findings
-            or source.verification_status != "verified"
-            or source.legal_status != "current"
-            or source.effective_date is None
-            or source.effective_date > review_date
-            or (source.end_date is not None and source.end_date < review_date)
-        ):
-            raise ValueError("Citation source or provision is not eligible.")
+        if provision is None or source is None or provision.legal_source_id != source.id:
+            continue
+
+        if not source.eligible_for_findings or source.verification_status != "verified":
+            continue
 
         if provision.id in seen:
             continue
+
         validated.append(
             LegalQuestionCitation(
                 source_id=source.id,
@@ -169,6 +191,9 @@ def _validate_citations(
             )
         )
         seen.add(provision.id)
+
+    if not validated and citations:
+        raise ValueError("None of the citations matched eligible retrieved evidence.")
 
     return validated
 

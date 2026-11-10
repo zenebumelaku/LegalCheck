@@ -44,17 +44,6 @@ export function AppSidebar({
       icon: BookOpen
     },
     {
-      label: 'New Audit',
-      path: '/audits/new',
-      icon: FilePlus2
-    },
-    {
-      label: 'Audit History',
-      path: '/audits',
-      icon: FileCheck2,
-      exact: true
-    },
-    {
       label: 'Settings',
       path: '/settings',
       icon: Settings

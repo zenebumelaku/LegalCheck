@@ -315,7 +315,7 @@ def _collect_semantic_matches(
             for chunk, provision, source, distance in rows
         ]
     else:
-        rows = db.execute(statement.limit(_MAX_CANDIDATES))
+        rows = db.execute(statement.limit(5000))
         semantic_hits = []
         for chunk, provision, source in rows:
             if chunk.embedding is None:

@@ -17,8 +17,21 @@ from app.core.logging import configure_logging
 from app.core.middleware import UploadRequestSizeLimitMiddleware
 from app.core.request_context import RequestContextMiddleware
 
+from contextlib import asynccontextmanager
+
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        from app.scripts.sync_all_documents import sync_all_documents
+        sync_all_documents()
+    except Exception as exc:
+        logger.warning("Startup document sync encountered error: %s", exc)
+    yield
+
 
 app = FastAPI(
     title=settings.app_name,
@@ -30,6 +43,7 @@ app = FastAPI(
         if settings.app_environment == "production"
         else "/openapi.json"
     ),
+    lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
