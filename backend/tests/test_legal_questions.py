@@ -242,7 +242,7 @@ def test_no_eligible_evidence_returns_insufficient_without_provider(
         effective_date=effective_date,
     )
 
-    def unavailable_provider():
+    def unavailable_provider(*args, **kwargs):
         raise AssertionError("Provider must not be called without eligible evidence.")
 
     monkeypatch.setattr(
@@ -270,7 +270,7 @@ def test_eligible_retrieved_evidence_is_answered_and_cited(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     response = _ask(legal_question_client, token)
@@ -301,7 +301,7 @@ def test_second_normalized_question_hits_cache_before_retrieval_or_generation(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
     original_retrieval = legal_question_answering.retrieve_legal_evidence
     retrieval_calls = 0
@@ -356,7 +356,7 @@ def test_knowledge_base_changes_invalidate_previous_answer(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
     first = _ask(legal_question_client, token)
     assert first.status_code == 200 and first.json()["cache_hit"] is False
@@ -455,7 +455,7 @@ def test_conversation_create_continue_and_read_preserves_citation_snapshot(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     created = _ask_in_conversation(
@@ -516,7 +516,7 @@ def test_conversation_list_is_owned_and_paginated(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
     conversation_ids = []
     for question in (
@@ -575,7 +575,7 @@ def test_conversation_access_and_mutations_are_owner_scoped(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
     created = _ask_in_conversation(
         legal_question_client,
@@ -658,7 +658,7 @@ def test_conversation_cache_keys_are_isolated_by_user(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     first = _ask_in_conversation(
@@ -692,7 +692,7 @@ def test_conversation_context_changes_cache_key(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
     first = _ask_in_conversation(
         legal_question_client,
@@ -727,7 +727,7 @@ def test_redis_failure_fails_open_without_cache_hit_or_write(
     answer_cache.fail_get = True
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     response = _ask(legal_question_client, token)
@@ -753,7 +753,7 @@ def test_redis_write_failure_still_returns_validated_answer(
     answer_cache.fail_set = True
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     response = _ask(legal_question_client, token)
@@ -784,7 +784,7 @@ def test_ineligible_results_do_not_crowd_out_eligible_evidence(
     provider = MockQuestionProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     response = _ask(legal_question_client, token)
@@ -815,7 +815,7 @@ def test_source_record_is_rechecked_after_generation(
     provider = SourceChangingProvider(_supported_response(provision))
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     response = _ask(legal_question_client, token)
@@ -848,7 +848,7 @@ def test_invalid_or_mismatched_citations_are_not_returned_as_answers(
     )
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     response = _ask(legal_question_client, token)
@@ -867,7 +867,7 @@ def test_provider_unavailable_returns_clear_service_error(
     user_id, token = _login(legal_question_client)
     _add_source(db_session, user_id=user_id)
 
-    def unavailable_provider():
+    def unavailable_provider(*args, **kwargs):
         raise LLMProviderError("disabled")
 
     monkeypatch.setattr(
@@ -897,7 +897,7 @@ def test_provider_rate_limit_returns_clear_retryable_error(
 
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: RateLimitedProvider(),
+        lambda *args, **kwargs: RateLimitedProvider(),
     )
     response = _ask(legal_question_client, token)
 
@@ -915,7 +915,7 @@ def test_invalid_provider_response_returns_clear_upstream_error(
     provider = MockQuestionProvider({"answer": "Missing required response fields."})
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
-        lambda: provider,
+        lambda *args, **kwargs: provider,
     )
 
     response = _ask(legal_question_client, token)

@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
@@ -86,6 +87,10 @@ class Settings(BaseSettings):
         "password_reset_from_email",
         "legal_qa_llm_provider",
         "contract_analysis_llm_provider",
+        "llm_api_key",
+        "llm_api_url",
+        "embedding_api_key",
+        "embedding_api_url",
         mode="before",
     )
     @classmethod
@@ -131,7 +136,7 @@ class Settings(BaseSettings):
         return self.max_docx_uncompressed_size_mb * 1024 * 1024
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=None if os.getenv("APP_ENVIRONMENT") == "test" else ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )

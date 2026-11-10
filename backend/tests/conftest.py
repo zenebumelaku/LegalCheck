@@ -1,11 +1,20 @@
+import os
 from typing import Generator
 
 import pytest
+
+os.environ.setdefault("APP_ENVIRONMENT", "test")
+
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import Settings, get_settings
 from app.db.models import Base
+
+Settings.model_config["env_file"] = None
+get_settings.cache_clear()
+
 
 
 @pytest.fixture(autouse=True)

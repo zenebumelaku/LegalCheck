@@ -17,34 +17,31 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "legal_sources",
-        sa.Column("applicability_reviewed_by", sa.Uuid(), nullable=True),
-    )
-    op.add_column(
-        "legal_sources",
-        sa.Column("applicability_reviewed_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.add_column(
-        "legal_sources",
-        sa.Column("applicability_review_notes", sa.Text(), nullable=True),
-    )
-    op.create_foreign_key(
-        "fk_legal_sources_applicability_reviewed_by_users",
-        "legal_sources",
-        "users",
-        ["applicability_reviewed_by"],
-        ["id"],
-        ondelete="RESTRICT",
-    )
+    with op.batch_alter_table("legal_sources", schema=None) as batch_op:
+        batch_op.add_column(
+            sa.Column("applicability_reviewed_by", sa.Uuid(), nullable=True),
+        )
+        batch_op.add_column(
+            sa.Column("applicability_reviewed_at", sa.DateTime(timezone=True), nullable=True),
+        )
+        batch_op.add_column(
+            sa.Column("applicability_review_notes", sa.Text(), nullable=True),
+        )
+        batch_op.create_foreign_key(
+            "fk_legal_sources_applicability_reviewed_by_users",
+            "users",
+            ["applicability_reviewed_by"],
+            ["id"],
+            ondelete="RESTRICT",
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "fk_legal_sources_applicability_reviewed_by_users",
-        "legal_sources",
-        type_="foreignkey",
-    )
-    op.drop_column("legal_sources", "applicability_review_notes")
-    op.drop_column("legal_sources", "applicability_reviewed_at")
-    op.drop_column("legal_sources", "applicability_reviewed_by")
+    with op.batch_alter_table("legal_sources", schema=None) as batch_op:
+        batch_op.drop_constraint(
+            "fk_legal_sources_applicability_reviewed_by_users",
+            type_="foreignkey",
+        )
+        batch_op.drop_column("applicability_review_notes")
+        batch_op.drop_column("applicability_reviewed_at")
+        batch_op.drop_column("applicability_reviewed_by")
