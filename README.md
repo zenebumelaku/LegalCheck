@@ -363,6 +363,28 @@ eligible for production findings; `unknown` remains ineligible. Rejected
 sources are excluded from public registry results. Status decisions are not
 automatically changed when a newer version is ingested.
 
+If the source text is verified but effective dates or current applicability
+need a separate review, an administrator other than the ingester can record a
+later decision with
+`POST /api/v1/legal-sources/{source_id}/applicability-review`. The request
+accepts `legal_status`, optional `effective_date` and `end_date`, and
+substantive `verification_notes`. Each applicability review is retained with
+its reviewer and timestamp; it does not overwrite the original provenance
+verification. A `current` decision requires an effective date. Do not select
+`current` merely because the source PDF states its commencement date; review
+amendments, repeal, and applicability separately. Any change updates the
+knowledge-base version used by legal-answer caching.
+
+For example, after a separate review establishes the commencement date but not
+amendment status, record the date while keeping status unknown:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/legal-sources/<source-id>/applicability-review" \
+  -H "Authorization: Bearer <reviewer-access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"legal_status":"unknown","effective_date":"<verified-date>","verification_notes":"<cite the commencement clause and note unresolved amendments/current applicability>"}'
+```
+
 To import an actual Ethiopian employment instrument, first obtain the
 publication from an authoritative Ethiopian legal publisher or government
 source, independently confirm its citation, dates, amendments/repeal status,

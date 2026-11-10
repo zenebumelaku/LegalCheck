@@ -14,6 +14,7 @@ from app.core.rate_limit import enforce_upload_rate_limit
 from app.db.models import LegalProvision, LegalSource, User
 from app.db.session import get_db
 from app.schemas.legal_sources import (
+    LegalSourceApplicabilityReviewRequest,
     LegalProvisionIngestion,
     LegalProvisionPage,
     LegalProvisionResponse,
@@ -27,6 +28,7 @@ from app.services.legal_source_ingestion import (
     DuplicateLegalSourceFileError,
     DuplicateLegalSourceVersionError,
     ingest_legal_source,
+    review_legal_source_applicability,
     review_legal_source,
 )
 from app.storage.interface import PrivateFileStorage, get_private_storage
@@ -352,6 +354,45 @@ def verify_legal_source(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="The source ingester cannot verify the same source.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    return LegalSourceResponse.model_validate(source)
+
+
+@router.post(
+    "/{source_id}/applicability-review",
+    response_model=LegalSourceResponse,
+)
+def review_source_applicability(
+    source_id: UUID,
+    payload: LegalSourceApplicabilityReviewRequest,
+    db: Session = Depends(get_db),
+    reviewer: User = Depends(require_roles("admin")),
+) -> LegalSourceResponse:
+    source = db.get(LegalSource, source_id)
+    if source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Legal source not found.",
+        )
+    try:
+        source = review_legal_source_applicability(
+            db=db,
+            source=source,
+            reviewer_id=reviewer.id,
+            legal_status=payload.legal_status,
+            effective_date=payload.effective_date,
+            end_date=payload.end_date,
+            verification_notes=payload.verification_notes,
+        )
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The source ingester cannot review source applicability.",
         ) from exc
     except ValueError as exc:
         raise HTTPException(

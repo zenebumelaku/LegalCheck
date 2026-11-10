@@ -1,13 +1,17 @@
 import hashlib
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import LegalProvision, LegalSource
+from app.db.models import (
+    LegalProvision,
+    LegalSource,
+    LegalSourceApplicabilityReview,
+)
 from app.schemas.legal_sources import (
     LegalProvisionIngestion,
     LegalSourceIngestionMetadata,
@@ -140,6 +144,46 @@ def review_legal_source(
     if decision == "verified":
         source.verified_by = reviewer_id
         source.verified_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(source)
+    return source
+
+
+def review_legal_source_applicability(
+    db: Session,
+    source: LegalSource,
+    reviewer_id: uuid.UUID,
+    legal_status: str,
+    effective_date: Optional[date],
+    end_date: Optional[date],
+    verification_notes: str,
+) -> LegalSource:
+    if source.verification_status != "verified":
+        raise ValueError("Only verified sources can receive applicability reviews.")
+    if source.source_file_storage_key is None or source.file_checksum is None:
+        raise ValueError("The source has no retained file provenance.")
+    if source.ingested_by == reviewer_id:
+        raise PermissionError("The ingester cannot review source applicability.")
+    if legal_status == "current" and effective_date is None:
+        raise ValueError("A current source must have a verified effective date.")
+    if effective_date is not None and end_date is not None and end_date < effective_date:
+        raise ValueError("end_date must not precede effective_date.")
+
+    source.legal_status = legal_status
+    source.effective_date = effective_date
+    source.end_date = end_date
+    source.applicability_reviewed_by = reviewer_id
+    source.applicability_reviewed_at = datetime.now(timezone.utc)
+    source.applicability_review_notes = verification_notes
+    source.applicability_reviews.append(
+        LegalSourceApplicabilityReview(
+            reviewer_id=reviewer_id,
+            legal_status=legal_status,
+            effective_date=effective_date,
+            end_date=end_date,
+            verification_notes=verification_notes,
+        )
+    )
     db.commit()
     db.refresh(source)
     return source

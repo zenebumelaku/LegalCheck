@@ -9,9 +9,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.routes.legal_sources import get_legal_source_storage
-from app.db.models import LegalProvision, LegalSource, User
+from app.db.models import (
+    LegalProvision,
+    LegalSource,
+    LegalSourceApplicabilityReview,
+    User,
+)
 from app.db.session import get_db
 from app.main import app
+from app.services.legal_question_cache import legal_knowledge_base_version
 from app.storage.interface import LocalPrivateFileStorage
 
 pytestmark = pytest.mark.unit
@@ -297,7 +303,12 @@ def test_current_source_without_effective_date_is_not_eligible(
         metadata_overrides={"effective_date": None},
     )
     source_id = ingested.json()["source"]["id"]
-
+    reviewer_response = legal_client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+    )
+    assert reviewer_response.status_code == 200
+    assert reviewer_response.json()["role"] == "admin"
     verified = legal_client.post(
         f"/api/v1/legal-sources/{source_id}/verify",
         headers={"Authorization": f"Bearer {reviewer_token}"},
@@ -434,6 +445,171 @@ def test_unknown_status_stays_ineligible_even_after_source_verification(
     assert response.json()["verification_status"] == "verified"
     assert response.json()["legal_status"] == "unknown"
     assert response.json()["eligible_for_findings"] is False
+
+
+def test_applicability_review_records_effective_date_without_claiming_current(
+    legal_client: TestClient,
+    db_session: Session,
+):
+    ingester, ingester_token = _register_and_login(
+        legal_client,
+        db_session,
+        "applicability-ingester@example.com",
+        role="admin",
+    )
+    reviewer, reviewer_token = _register_and_login(
+        legal_client,
+        db_session,
+        "applicability-reviewer@example.com",
+        role="admin",
+    )
+    ingested = _ingest(
+        legal_client,
+        ingester_token,
+        metadata_overrides={"effective_date": None},
+    )
+    source_id = ingested.json()["source"]["id"]
+    reviewer_response = legal_client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {reviewer_token}"},
+    )
+    assert reviewer_response.status_code == 200
+    assert reviewer_response.json()["role"] == "admin"
+    verified = legal_client.post(
+        f"/api/v1/legal-sources/{source_id}/verify",
+        headers={"Authorization": " ".join(("Bearer", reviewer_token))},
+        json={
+            "decision": "verified",
+            "legal_status": "unknown",
+            "verification_notes": "Verified source text against the test fixture.",
+        },
+    )
+    assert verified.status_code == 200
+    knowledge_base_version_before = legal_knowledge_base_version(db_session)
+
+    updated = legal_client.post(
+        f"/api/v1/legal-sources/{source_id}/applicability-review",
+        headers={"Authorization": " ".join(("Bearer", reviewer_token))},
+        json={
+            "legal_status": "unknown",
+            "effective_date": "2020-01-01",
+            "verification_notes": "Fixture Article 193 establishes commencement date.",
+        },
+    )
+
+    assert updated.status_code == 200
+    body = updated.json()
+    knowledge_base_version_after = legal_knowledge_base_version(db_session)
+    assert knowledge_base_version_after != knowledge_base_version_before
+    assert body["effective_date"] == "2020-01-01"
+    assert body["legal_status"] == "unknown"
+    assert body["eligible_for_findings"] is False
+    assert body["applicability_reviewed_by"] == str(reviewer.id)
+    assert body["applicability_reviewed_at"] is not None
+    assert "commencement date" in body["applicability_review_notes"]
+    source = db_session.get(LegalSource, UUID(source_id))
+    assert source is not None
+    assert source.verification_notes == verified.json()["verification_notes"]
+    assert source.verified_by == reviewer.id
+    assert source.ingested_by == ingester.id
+    second_review = legal_client.post(
+        f"/api/v1/legal-sources/{source_id}/applicability-review",
+        headers={"Authorization": " ".join(("Bearer", reviewer_token))},
+        json={
+            "legal_status": "unknown",
+            "effective_date": "2020-01-01",
+            "verification_notes": "Amendment status remains unknown after review.",
+        },
+    )
+    assert second_review.status_code == 200
+    review_history = db_session.scalars(
+        select(LegalSourceApplicabilityReview).where(
+            LegalSourceApplicabilityReview.source_id == source.id
+        )
+    ).all()
+    assert len(review_history) == 2
+    assert {review.reviewer_id for review in review_history} == {reviewer.id}
+    assert {
+        review.verification_notes for review in review_history
+    } == {
+        "Fixture Article 193 establishes commencement date.",
+        "Amendment status remains unknown after review.",
+    }
+
+
+def test_applicability_review_requires_separate_admin_and_verified_date_for_current(
+    legal_client: TestClient,
+    db_session: Session,
+):
+    ingester, ingester_token = _register_and_login(
+        legal_client,
+        db_session,
+        "applicability-guard-ingester@example.com",
+        role="admin",
+    )
+    _, reviewer_token = _register_and_login(
+        legal_client,
+        db_session,
+        "applicability-guard-reviewer@example.com",
+        role="admin",
+    )
+    _, user_token = _register_and_login(
+        legal_client,
+        db_session,
+        "applicability-guard-user@example.com",
+    )
+    ingested = _ingest(
+        legal_client,
+        ingester_token,
+        metadata_overrides={"effective_date": None},
+    )
+    source_id = ingested.json()["source"]["id"]
+    verified = legal_client.post(
+        f"/api/v1/legal-sources/{source_id}/verify",
+        headers={"Authorization": " ".join(("Bearer", reviewer_token))},
+        json={
+            "decision": "verified",
+            "legal_status": "unknown",
+            "verification_notes": "Verified source text against the test fixture.",
+        },
+    )
+    assert verified.status_code == 200
+
+    self_review = legal_client.post(
+        f"/api/v1/legal-sources/{source_id}/applicability-review",
+        headers={"Authorization": " ".join(("Bearer", ingester_token))},
+        json={
+            "legal_status": "unknown",
+            "effective_date": "2020-01-01",
+            "verification_notes": "Fixture commencement date was checked.",
+        },
+    )
+    non_admin = legal_client.post(
+        f"/api/v1/legal-sources/{source_id}/applicability-review",
+        headers={"Authorization": " ".join(("Bearer", user_token))},
+        json={
+            "legal_status": "unknown",
+            "effective_date": "2020-01-01",
+            "verification_notes": "Fixture commencement date was checked.",
+        },
+    )
+    current_without_date = legal_client.post(
+        f"/api/v1/legal-sources/{source_id}/applicability-review",
+        headers={"Authorization": " ".join(("Bearer", reviewer_token))},
+        json={
+            "legal_status": "current",
+            "verification_notes": "Current status verified against fixture law.",
+        },
+    )
+
+    assert self_review.status_code == 403
+    assert non_admin.status_code == 403
+    assert current_without_date.status_code == 422
+    source = db_session.get(LegalSource, UUID(source_id))
+    assert source is not None
+    assert source.effective_date is None
+    assert source.legal_status == "unknown"
+    assert source.applicability_reviewed_by is None
 
 
 def test_rejected_source_is_not_publicly_searchable(

@@ -391,6 +391,18 @@ class LegalSource(Base):
         String(30), nullable=False, default="unverified"
     )
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    applicability_reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "users.id",
+            ondelete="RESTRICT",
+            name="fk_legal_sources_applicability_reviewed_by_users",
+        ),
+    )
+    applicability_reviewed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    applicability_review_notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -405,6 +417,11 @@ class LegalSource(Base):
         back_populates="legal_source",
         passive_deletes="all",
     )
+    applicability_reviews: Mapped[List["LegalSourceApplicabilityReview"]] = relationship(
+        back_populates="source",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     @property
     def eligible_for_findings(self) -> bool:
@@ -418,6 +435,50 @@ class LegalSource(Base):
             and self.verified_at is not None
             and self.original_source_url is not None
         )
+
+
+class LegalSourceApplicabilityReview(Base):
+    __tablename__ = "legal_source_applicability_reviews"
+    __table_args__ = (
+        Index(
+            "ix_legal_source_applicability_reviews_source_time",
+            "source_id",
+            "reviewed_at",
+        ),
+        CheckConstraint(
+            "legal_status IN ('unknown', 'current', 'amended', 'repealed', 'superseded')",
+            name="ck_legal_source_applicability_reviews_status",
+        ),
+        CheckConstraint(
+            "end_date IS NULL OR effective_date IS NULL OR end_date >= effective_date",
+            name="ck_legal_source_applicability_reviews_dates",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("legal_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    reviewer_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    legal_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    effective_date: Mapped[Optional[date]] = mapped_column(Date)
+    end_date: Mapped[Optional[date]] = mapped_column(Date)
+    verification_notes: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    source: Mapped["LegalSource"] = relationship(
+        back_populates="applicability_reviews"
+    )
 
 
 class LegalProvision(Base):

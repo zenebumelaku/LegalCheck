@@ -102,6 +102,37 @@ class LegalSourceReviewRequest(BaseModel):
         return normalized
 
 
+class LegalSourceApplicabilityReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    legal_status: LegalStatus
+    effective_date: Optional[date] = None
+    end_date: Optional[date] = None
+    verification_notes: str = Field(min_length=10, max_length=10_000)
+
+    @field_validator("verification_notes")
+    @classmethod
+    def trim_notes(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 10:
+            raise ValueError("Review notes must contain at least 10 characters.")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_applicability_dates(self) -> "LegalSourceApplicabilityReviewRequest":
+        if (
+            self.effective_date is not None
+            and self.end_date is not None
+            and self.end_date < self.effective_date
+        ):
+            raise ValueError("end_date must not precede effective_date.")
+        if self.legal_status == "current" and self.effective_date is None:
+            raise ValueError(
+                "A current source must have a verified effective_date."
+            )
+        return self
+
+
 class LegalSourceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -124,6 +155,9 @@ class LegalSourceResponse(BaseModel):
     ingested_by: Optional[UUID]
     verified_by: Optional[UUID]
     verification_notes: Optional[str]
+    applicability_reviewed_by: Optional[UUID]
+    applicability_reviewed_at: Optional[datetime]
+    applicability_review_notes: Optional[str]
     created_at: datetime
     updated_at: datetime
 
