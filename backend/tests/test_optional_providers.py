@@ -12,7 +12,6 @@ from app.services.llm_provider import (
     LLMProviderUnavailableError,
     GeminiLLMProvider,
     OllamaLLMProvider,
-    get_contract_analysis_provider,
     get_llm_provider,
 )
 
@@ -115,56 +114,12 @@ def test_gemini_adapter_uses_existing_interface_and_keeps_key_out_of_url(
     assert captured["max_response_bytes"] == 1_000_000
 
 
-def test_gemini_contract_prompt_defines_the_audit_response_schema(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.schemas.compliance_analysis import LLMClauseAnalysis
-
-    captured = {}
-    response_text = json.dumps(
-        {
-            "category": "insufficient_evidence",
-            "severity": "informational",
-            "explanation": "No legal evidence was supplied.",
-            "recommended_action": None,
-            "evidence_assessment": "insufficient",
-            "citations": [],
-            "model_confidence": None,
-        }
-    )
-
-    def fake_post(url, *, payload, **kwargs):
-        captured["system"] = payload["systemInstruction"]["parts"][0]["text"]
-        return {
-            "candidates": [
-                {"content": {"parts": [{"text": response_text}]}}
-            ]
-        }
-
-    monkeypatch.setattr("app.services.llm_provider.post_bounded_json", fake_post)
-    provider = GeminiLLMProvider(_gemini_settings())
-
-    parsed = LLMClauseAnalysis.model_validate(
-        json.loads(
-            provider.analyze_clause(
-                {"clause_id": "synthetic-clause", "original_text": "Synthetic text"},
-                [],
-            )
-        )
-    )
-
-    assert parsed.category == "insufficient_evidence"
-    assert "recommended_action" in captured["system"]
-    assert "supporting_quote" in captured["system"]
-    assert "Do not return clause_id" in captured["system"]
-
-
 def test_gemini_provider_factory_requires_api_key() -> None:
     with pytest.raises(LLMProviderUnavailableError, match="API key"):
         get_llm_provider(_gemini_settings(llm_api_key=None))
 
 
-def test_legal_qa_provider_override_does_not_enable_audit_provider(
+def test_legal_qa_provider_override_is_used(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = Settings(
@@ -191,49 +146,6 @@ def test_legal_qa_provider_override_does_not_enable_audit_provider(
     assert settings.llm_provider == "disabled"
     assert captured["settings"].llm_provider == "gemini"
     assert captured["settings"].legal_qa_llm_provider == "gemini"
-
-
-def test_contract_provider_override_is_explicit_and_backward_compatible(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = Settings(
-        llm_provider="disabled",
-        contract_analysis_llm_provider="gemini",
-        llm_api_key=SecretStr("synthetic-gemini-key"),
-        llm_model_name="gemini-2.5-flash-lite",
-    )
-    captured = {}
-
-    def fake_get_provider(provider_settings=None):
-        captured["settings"] = provider_settings
-        return object()
-
-    monkeypatch.setattr("app.services.llm_provider.get_settings", lambda: settings)
-    monkeypatch.setattr("app.services.llm_provider.get_llm_provider", fake_get_provider)
-
-    get_contract_analysis_provider()
-
-    assert settings.llm_provider == "disabled"
-    assert captured["settings"].llm_provider == "gemini"
-    assert captured["settings"].contract_analysis_llm_provider == "gemini"
-
-
-def test_contract_provider_uses_existing_shared_provider_when_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = Settings(llm_provider="ollama")
-    captured = {}
-
-    def fake_get_provider(provider_settings=None):
-        captured["settings"] = provider_settings
-        return object()
-
-    monkeypatch.setattr("app.services.llm_provider.get_settings", lambda: settings)
-    monkeypatch.setattr("app.services.llm_provider.get_llm_provider", fake_get_provider)
-
-    get_contract_analysis_provider()
-
-    assert captured["settings"] is settings
 
 
 def test_gemini_rate_limit_is_reported_distinctly(

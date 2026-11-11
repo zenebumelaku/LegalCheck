@@ -1,17 +1,11 @@
 import uuid
-from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models import (
-    Audit,
     Document,
-    Feedback,
-    Finding,
-    FindingCitation,
-    LegalProvision,
     LegalSource,
     Organization,
     OrganizationMembership,
@@ -40,66 +34,6 @@ def test_user_organization_membership_relationships(db_session: Session) -> None
     assert membership.organization is organization
     assert isinstance(user.id, uuid.UUID)
     assert isinstance(organization.id, uuid.UUID)
-
-
-def test_audit_findings_citations_and_feedback_are_related(db_session: Session) -> None:
-    user = make_user("Aster", "aster@example.test")
-    db_session.add(user)
-    db_session.flush()
-    document = Document(
-        owner=user,
-        original_filename="employment-contract.pdf",
-        storage_key="documents/opaque-key",
-        content_type="application/pdf",
-        file_size=256,
-    )
-    audit = Audit(document=document, requester=user)
-    source = LegalSource(
-        title="Employment source",
-        source_type="statute",
-        jurisdiction="ET",
-        language="en",
-        effective_date=date(2020, 1, 1),
-        legal_status="current",
-        verification_status="verified",
-        verified_by=user.id,
-        verified_at=datetime.now(timezone.utc),
-        original_source_url="https://example.com/test-source.pdf",
-        file_checksum="a" * 64,
-        source_file_storage_key="legal-sources/test.pdf",
-    )
-    provision = LegalProvision(
-        legal_source=source,
-        article_number="1",
-        text="Provision text",
-        language="en",
-    )
-    finding = Finding(
-        audit=audit,
-        finding_type="missing_clause",
-        severity="medium",
-        clause_text="Clause",
-        explanation="Explanation",
-    )
-    citation = FindingCitation(
-        finding=finding,
-        legal_provision=provision,
-        supporting_quote="Relevant text",
-    )
-    feedback = Feedback(
-        finding=finding,
-        submitter=user,
-        feedback_type="incorrect",
-    )
-    db_session.add_all([document, source, audit, finding, citation, feedback])
-    db_session.commit()
-
-    assert document.audits == [audit]
-    assert audit.findings == [finding]
-    assert finding.citations == [citation]
-    assert citation.legal_provision is provision
-    assert finding.feedback == [feedback]
-    assert provision.legal_source is source
 
 
 def test_unique_user_email_and_membership_constraint(db_session: Session) -> None:
@@ -138,9 +72,7 @@ def test_unique_user_email_and_membership_constraint(db_session: Session) -> Non
     db_session.rollback()
 
 
-def test_document_file_size_and_finding_confidence_constraints(
-    db_session: Session,
-) -> None:
+def test_document_file_size_constraint(db_session: Session) -> None:
     user = make_user("Aster", "aster@example.test")
     db_session.add(user)
     db_session.commit()
@@ -164,68 +96,7 @@ def test_document_file_size_and_finding_confidence_constraints(
         file_size=0,
     )
     db_session.add(valid_document)
-    db_session.flush()
-    audit = Audit(document=valid_document, requester=user)
-    db_session.add(audit)
-    db_session.flush()
-    db_session.add(
-        Finding(
-            audit=audit,
-            finding_type="test",
-            severity="low",
-            confidence=1.5,
-            clause_text="Clause",
-            explanation="Explanation",
-        )
-    )
-    with pytest.raises(IntegrityError):
-        db_session.commit()
-
-
-def test_audit_history_blocks_document_deletion(db_session: Session) -> None:
-    user = make_user("Aster", "aster@example.test")
-    document = Document(
-        owner=user,
-        original_filename="contract.pdf",
-        storage_key="documents/key",
-        content_type="application/pdf",
-        file_size=12,
-    )
-    audit = Audit(document=document, requester=user)
-    db_session.add_all([document, audit])
     db_session.commit()
-
-    db_session.delete(document)
-    with pytest.raises(IntegrityError):
-        db_session.commit()
-
-
-def test_audit_results_cannot_be_deleted_with_their_audit(
-    db_session: Session,
-) -> None:
-    user = make_user("Aster", "aster@example.test")
-    document = Document(
-        owner=user,
-        original_filename="contract.pdf",
-        storage_key="documents/key",
-        content_type="application/pdf",
-        file_size=12,
-    )
-    audit = Audit(document=document, requester=user)
-    audit.findings.append(
-        Finding(
-            finding_type="test",
-            severity="low",
-            clause_text="Clause",
-            explanation="Explanation",
-        )
-    )
-    db_session.add(audit)
-    db_session.commit()
-
-    db_session.delete(audit)
-    with pytest.raises(IntegrityError):
-        db_session.commit()
 
 
 def test_legal_source_versions_are_distinct_and_not_current_by_default(
@@ -253,96 +124,3 @@ def test_legal_source_versions_are_distinct_and_not_current_by_default(
     assert source_v1.id != source_v2.id
     assert source_v1.legal_status == "unknown"
     assert source_v1.verification_status == "unverified"
-
-
-def test_unverified_legal_source_cannot_be_used_as_finding_citation(
-    db_session: Session,
-) -> None:
-    user = make_user("Reviewer", "reviewer@example.test")
-    document = Document(
-        owner=user,
-        original_filename="contract.pdf",
-        storage_key="documents/review-test",
-        content_type="application/pdf",
-        file_size=10,
-    )
-    audit = Audit(document=document, requester=user)
-    source = LegalSource(
-        title="Unverified fixture source",
-        source_type="statute",
-        jurisdiction="test",
-        language="en",
-    )
-    provision = LegalProvision(
-        legal_source=source,
-        article_number="fixture",
-        text="Fixture text",
-        language="en",
-    )
-    finding = Finding(
-        audit=audit,
-        finding_type="fixture",
-        severity="low",
-        clause_text="Fixture",
-        explanation="Fixture",
-    )
-    db_session.add(
-        FindingCitation(
-            finding=finding,
-            legal_provision=provision,
-        )
-    )
-
-    with pytest.raises(ValueError, match="verified source marked current"):
-        db_session.commit()
-
-
-def test_current_legal_source_without_effective_date_cannot_be_cited(
-    db_session: Session,
-) -> None:
-    user = make_user("Date Reviewer", "date-reviewer@example.test")
-    db_session.add(user)
-    db_session.flush()
-    document = Document(
-        owner=user,
-        original_filename="contract.pdf",
-        storage_key="documents/unknown-effective-date",
-        content_type="application/pdf",
-        file_size=10,
-    )
-    audit = Audit(document=document, requester=user)
-    source = LegalSource(
-        title="Synthetic source with unknown effective date",
-        source_type="test_fixture",
-        jurisdiction="test",
-        language="en",
-        legal_status="current",
-        verification_status="verified",
-        verified_by=user.id,
-        verified_at=datetime.now(timezone.utc),
-        original_source_url="https://example.test/synthetic-source.pdf",
-        file_checksum="c" * 64,
-        source_file_storage_key="synthetic-source.pdf",
-    )
-    provision = LegalProvision(
-        legal_source=source,
-        article_number="synthetic-article",
-        text="Synthetic fixture text only.",
-        language="en",
-    )
-    finding = Finding(
-        audit=audit,
-        finding_type="fixture",
-        severity="low",
-        clause_text="Fixture",
-        explanation="Fixture",
-    )
-    db_session.add(
-        FindingCitation(
-            finding=finding,
-            legal_provision=provision,
-        )
-    )
-
-    with pytest.raises(ValueError, match="verified source marked current"):
-        db_session.commit()

@@ -298,6 +298,49 @@ def legal_question_cache_key(
     return f"{_CACHE_KEY_PREFIX}:{settings.legal_qa_cache_version}:{digest}"
 
 
+class MemoryLegalQuestionCache:
+    def __init__(self) -> None:
+        self._entries: dict[str, LegalQuestionAnswer] = {}
+        self._lock = Lock()
+
+    def get(self, key: str) -> Optional[LegalQuestionAnswer]:
+        with self._lock:
+            value = self._entries.get(key)
+            if value is None:
+                return None
+            return value.model_copy(deep=True)
+
+    def ping(self) -> bool:
+        return True
+
+    def set(
+        self,
+        key: str,
+        answer: LegalQuestionAnswer,
+        ttl_seconds: int,
+    ) -> None:
+        if answer.status != "answered" or not answer.citations:
+            raise ValueError("Only supported legal-question answers may be cached.")
+        with self._lock:
+            self._entries[key] = answer.model_copy(update={"cache_hit": False})
+
+    def invalidate_all(self) -> int:
+        with self._lock:
+            count = len(self._entries)
+            self._entries.clear()
+            return count
+
+
 @lru_cache
 def get_legal_question_cache() -> LegalQuestionCache:
-    return RedisLegalQuestionCache(get_settings())
+    settings = get_settings()
+    cache = RedisLegalQuestionCache(settings)
+    try:
+        if cache.ping():
+            return cache
+    except RedisError:
+        pass
+    logger.warning(
+        "Redis legal-question cache is unavailable; falling back to in-memory cache."
+    )
+    return MemoryLegalQuestionCache()

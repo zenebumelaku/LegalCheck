@@ -78,7 +78,7 @@ def test_rate_limiter_fails_closed_without_leaking_redis_details() -> None:
     limiter._redis = FailingRedis()
 
     with pytest.raises(HTTPException) as raised:
-        limiter.check(_request(), "audit-create", 5)
+        limiter.check(_request(), "login", 10)
 
     assert raised.value.status_code == 503
     assert "sensitive connection detail" not in str(raised.value.detail)

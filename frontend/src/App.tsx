@@ -30,7 +30,7 @@ export default function App() {
 
   useEffect(() => {
     if (path.startsWith('/audits')) {
-      navigate('/legal-chat');
+      navigate('/dashboard');
     }
   }, [navigate, path]);
 

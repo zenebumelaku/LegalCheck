@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.models import LegalProvision, LegalSource
-from app.schemas.compliance_analysis import CitationReference
+from app.schemas.citations import CitationReference
 from app.schemas.legal_questions import (
     LegalQuestionAnswer,
     LegalQuestionCitation,

@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.compliance_analysis import CitationReference
+from app.schemas.citations import CitationReference
 from app.schemas.legal_retrieval import LegalReviewContext
 
 

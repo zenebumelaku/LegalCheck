@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from app.api.routes.documents import get_document_storage
 from app.core.config import settings
 from app.db.models import (
-    Audit,
     Document,
     Organization,
     OrganizationMembership,
@@ -408,12 +407,12 @@ def test_cross_user_cannot_read_list_or_delete_document(
     assert str(stored.owner_user_id) == first_user["id"]
 
 
-def test_delete_soft_deletes_metadata_and_removes_file_without_losing_audit(
+def test_delete_soft_deletes_metadata_and_removes_file(
     document_client: TestClient,
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    user_data, token = _register_and_token(document_client, "delete@example.com")
+    _, token = _register_and_token(document_client, "delete@example.com")
     uploaded = _upload(
         document_client,
         token,
@@ -423,11 +422,7 @@ def test_delete_soft_deletes_metadata_and_removes_file_without_losing_audit(
     )
     document_id = UUID(uploaded.json()["id"])
     document = db_session.get(Document, document_id)
-    user = db_session.get(User, UUID(user_data["id"]))
-    assert document is not None and user is not None
-    audit = Audit(document=document, requester=user)
-    db_session.add(audit)
-    db_session.commit()
+    assert document is not None
     storage_files = list((tmp_path / "private-files").rglob("*.docx"))
     assert len(storage_files) == 1
 
@@ -439,7 +434,6 @@ def test_delete_soft_deletes_metadata_and_removes_file_without_losing_audit(
     assert response.status_code == 204
     assert document.deleted_at is not None
     assert document.processing_status == "deleted"
-    assert db_session.get(Audit, audit.id) is not None
     assert not storage_files[0].exists()
     assert document_client.get(
         f"/api/v1/documents/{document_id}",

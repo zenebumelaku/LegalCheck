@@ -110,7 +110,7 @@ export function LegalSourceModal({
           {fullSource && (
             <div className="pt-3 border-t border-slate-100 text-[11px] text-slate-500 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                Verified By: {fullSource.provenance.verifiedBy} (Last audited: {fullSource.provenance.lastVerifiedDate})
+                Verified By: {fullSource.provenance.verifiedBy} (Last verified: {fullSource.provenance.lastVerifiedDate})
               </div>
               {provision.sourceUrl && (
                 <a

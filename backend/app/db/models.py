@@ -1,6 +1,5 @@
 import uuid
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
@@ -12,14 +11,11 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    Numeric,
     String,
     Text,
     UniqueConstraint,
     Uuid,
-    event,
     func,
-    select,
     text as sql_text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -78,14 +74,6 @@ class User(Base):
     )
     documents: Mapped[List["Document"]] = relationship(
         back_populates="owner",
-        passive_deletes="all",
-    )
-    requested_audits: Mapped[List["Audit"]] = relationship(
-        back_populates="requester",
-        passive_deletes="all",
-    )
-    submitted_feedback: Mapped[List["Feedback"]] = relationship(
-        back_populates="submitter",
         passive_deletes="all",
     )
     auth_sessions: Mapped[List["AuthSession"]] = relationship(
@@ -512,10 +500,6 @@ class LegalProvision(Base):
     )
 
     legal_source: Mapped["LegalSource"] = relationship(back_populates="provisions")
-    citations: Mapped[List["FindingCitation"]] = relationship(
-        back_populates="legal_provision",
-        passive_deletes="all",
-    )
 
 
 Index(
@@ -625,206 +609,3 @@ class Document(Base):
 
     owner: Mapped["User"] = relationship(back_populates="documents")
     organization: Mapped[Optional["Organization"]] = relationship(back_populates="documents")
-    audits: Mapped[List["Audit"]] = relationship(
-        back_populates="document",
-        passive_deletes="all",
-    )
-
-
-class Audit(Base):
-    __tablename__ = "audits"
-    __table_args__ = (
-        CheckConstraint(
-            "audit_status IN ('queued', 'extracting', 'retrieving_sources', "
-            "'analyzing', 'generating_report', 'completed', 'failed')",
-            name="ck_audits_status",
-        ),
-        CheckConstraint(
-            "completed_at IS NULL OR started_at IS NULL OR completed_at >= started_at",
-            name="ck_audits_completion_time",
-        ),
-        Index("ix_audits_document_created", "document_id", "created_at"),
-        Index("ix_audits_requester_created", "requested_by", "created_at"),
-        Index("ix_audits_status", "audit_status"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    document_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("documents.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    requested_by: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    audit_status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
-    review_options: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    processing_warnings: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)
-    processing_attempt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        Uuid(as_uuid=True)
-    )
-    analysis_version: Mapped[Optional[str]] = mapped_column(String(100))
-    model_identifier: Mapped[Optional[str]] = mapped_column(String(255))
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    failure_code: Mapped[Optional[str]] = mapped_column(String(100))
-    failure_message: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    document: Mapped["Document"] = relationship(back_populates="audits")
-    requester: Mapped["User"] = relationship(back_populates="requested_audits")
-    findings: Mapped[List["Finding"]] = relationship(
-        back_populates="audit",
-        passive_deletes="all",
-    )
-
-
-class Finding(Base):
-    __tablename__ = "findings"
-    __table_args__ = (
-        CheckConstraint(
-            "severity IN ('informational', 'low', 'medium', 'high', 'critical')",
-            name="ck_findings_severity",
-        ),
-        CheckConstraint(
-            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
-            name="ck_findings_confidence",
-        ),
-        Index("ix_findings_audit_severity", "audit_id", "severity"),
-        Index("ix_findings_type", "finding_type"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    audit_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("audits.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    finding_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    severity: Mapped[str] = mapped_column(String(30), nullable=False)
-    confidence: Mapped[Optional[Decimal]] = mapped_column(Numeric(4, 3))
-    clause_text: Mapped[str] = mapped_column(Text, nullable=False)
-    explanation: Mapped[str] = mapped_column(Text, nullable=False)
-    recommended_action: Mapped[Optional[str]] = mapped_column(Text)
-    evidence_status: Mapped[str] = mapped_column(
-        String(30), nullable=False, default="unverified"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    audit: Mapped["Audit"] = relationship(back_populates="findings")
-    citations: Mapped[List["FindingCitation"]] = relationship(
-        back_populates="finding",
-        passive_deletes="all",
-    )
-    feedback: Mapped[List["Feedback"]] = relationship(
-        back_populates="finding",
-        passive_deletes="all",
-    )
-
-
-class FindingCitation(Base):
-    __tablename__ = "finding_citations"
-    __table_args__ = (
-        UniqueConstraint(
-            "finding_id",
-            "legal_provision_id",
-            name="uq_finding_citation_provision",
-        ),
-        Index("ix_finding_citations_legal_provision_id", "legal_provision_id"),
-    )
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    finding_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("findings.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    legal_provision_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("legal_provisions.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    supporting_quote: Mapped[Optional[str]] = mapped_column(Text)
-    relevance_information: Mapped[Optional[str]] = mapped_column(Text)
-    source_title_snapshot: Mapped[Optional[str]] = mapped_column(String(500))
-    source_version_snapshot: Mapped[Optional[str]] = mapped_column(String(100))
-    source_url_snapshot: Mapped[Optional[str]] = mapped_column(String(2048))
-    article_number_snapshot: Mapped[Optional[str]] = mapped_column(String(100))
-    sub_article_reference_snapshot: Mapped[Optional[str]] = mapped_column(String(100))
-    provision_text_snapshot: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    finding: Mapped["Finding"] = relationship(back_populates="citations")
-    legal_provision: Mapped["LegalProvision"] = relationship(back_populates="citations")
-
-
-@event.listens_for(FindingCitation, "before_insert")
-def require_verified_current_citation_source(
-    mapper: Any,
-    connection: Any,
-    target: FindingCitation,
-) -> None:
-    source_status = connection.execute(
-        select(
-            LegalSource.verification_status,
-            LegalSource.legal_status,
-            LegalSource.effective_date,
-            LegalSource.file_checksum,
-            LegalSource.source_file_storage_key,
-            LegalSource.verified_by,
-            LegalSource.verified_at,
-            LegalSource.original_source_url,
-        )
-        .join(
-            LegalProvision,
-            LegalProvision.legal_source_id == LegalSource.id,
-        )
-        .where(LegalProvision.id == target.legal_provision_id)
-    ).one_or_none()
-    if (
-        source_status is None
-        or source_status.verification_status != "verified"
-        or source_status.legal_status != "current"
-        or source_status.effective_date is None
-        or source_status.file_checksum is None
-        or source_status.source_file_storage_key is None
-        or source_status.verified_by is None
-        or source_status.verified_at is None
-        or source_status.original_source_url is None
-    ):
-        raise ValueError(
-            "A finding citation requires a verified source marked current."
-        )
-
-
-class Feedback(Base):
-    __tablename__ = "feedback"
-    __table_args__ = (Index("ix_feedback_finding_created", "finding_id", "created_at"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    finding_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("findings.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    submitted_by: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    feedback_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-
-    finding: Mapped["Finding"] = relationship(back_populates="feedback")
-    submitter: Mapped["User"] = relationship(back_populates="submitted_feedback")

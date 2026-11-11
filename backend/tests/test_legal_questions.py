@@ -450,14 +450,14 @@ def test_cache_key_includes_effective_legal_qa_provider() -> None:
         "context": {"jurisdiction": "ET", "review_date": "2024-01-01"},
         "knowledge_base_version": "synthetic-kb-v1",
     }
-    audit_provider_disabled = Settings(llm_provider="disabled")
+    provider_disabled = Settings(llm_provider="disabled")
     qa_provider_gemini = Settings(
         llm_provider="disabled",
         legal_qa_llm_provider="gemini",
     )
 
     disabled_key = legal_question_cache_key(
-        settings=audit_provider_disabled,
+        settings=provider_disabled,
         **common,
     )
     gemini_key = legal_question_cache_key(

@@ -113,14 +113,3 @@ def enforce_upload_rate_limit(
         "upload",
         get_settings().rate_limit_upload_per_minute,
     )
-
-
-def enforce_audit_rate_limit(
-    request: Request,
-    limiter: RateLimiter = Depends(get_rate_limiter),
-) -> None:
-    limiter.check(
-        request,
-        "audit-create",
-        get_settings().rate_limit_audit_per_minute,
-    )

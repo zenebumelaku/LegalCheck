@@ -1,23 +1,21 @@
 # LegalCheck Ethiopia
 
-Backend foundation for the LegalCheck Ethiopia employment-contract compliance
-platform. The initial setup provides a versioned FastAPI application, health
-checks, environment-based settings, CORS configuration, centralized errors,
-and structured JSON logs.
+LegalCheck Ethiopia provides evidence-grounded legal research and answers
+using a React frontend and FastAPI backend. The backend includes authentication,
+legal-source management, document ingestion, retrieval, and optional answer
+caching.
 
 ## Requirements
 
 - Python 3.11 or newer
 - PostgreSQL with pgvector for the application database and semantic retrieval
-- Redis for rate limiting, the audit job queue, and optional answer caching
+- Redis for request rate limiting and optional answer caching
 - Node.js/npm only when building or running the React frontend
 
-The API and database are required for normal application use. Redis is required
-for protected rate-limited operations and queued contract audits: rate limiting
-fails closed if Redis is unavailable. Run the audit worker to process queued
-audits; without it, queued audits will not be processed. Embeddings and LLM
-generation are optional integrations, but an answerable legal Q&A request
-requires eligible indexed legal sources and an available configured LLM provider.
+The API and database are required. Redis is used by rate-limited operations
+and optional answer caching; rate limiting fails closed if Redis is unavailable.
+Embeddings and LLM generation are optional, but answering a legal question
+requires eligible indexed sources and a configured LLM provider.
 
 ## Set up the backend
 
@@ -51,9 +49,8 @@ only in an ignored local `.env` file or a deployment secret manager. The
 application does not read `SECRET_KEY`; do not rely on it as an application
 security setting.
 
-Start Redis separately, for example with `redis-server`. `REDIS_URL` must point
-to the same Redis service for the API and worker. Do not reuse development
-database or Redis URLs in production.
+Start Redis separately, for example with `redis-server`. Set `REDIS_URL` to
+that service. Do not reuse development database or Redis URLs in production.
 
 ## Run the application
 
@@ -65,21 +62,6 @@ uvicorn app.main:app --reload
 
 The interactive API documentation is available at
 `http://127.0.0.1:8000/docs`.
-
-Run the separate audit worker in another terminal, with the same backend
-environment and dependencies:
-
-```bash
-cd backend
-source .venv/bin/activate
-python -m app.workers.audit_worker
-```
-
-The API enqueues contract audits; the RQ worker consumes them. Legal Q&A is
-served directly by the API and does not use this audit queue. On macOS local
-development, use `rq worker --worker-class rq.worker.SimpleWorker legalcheck-audits`
-to avoid Objective-C runtime crashes from RQ's fork-based worker; use the
-standard worker in a Linux deployment.
 
 For the frontend, configure `VITE_API_BASE_URL` in your local
 `frontend/.env`, then run:
@@ -129,14 +111,10 @@ LLM generation is disabled by default. To enable it, configure
 Generative Language API over HTTPS and the API key is sent only in the
 `x-goog-api-key` request header. For legal-Q&A-only generation, set
 `LLM_PROVIDER=disabled` and `LEGAL_QA_LLM_PROVIDER=gemini` (or another supported
-provider); that keeps contract-audit AI disabled. The Q&A override uses the
-configured LLM model, version, URL, and key settings, and is included in cache
-keys. Contract analysis can be separately enabled with
-`CONTRACT_ANALYSIS_LLM_PROVIDER=gemini` (or another supported provider); this
-setting explicitly opts in to sending extracted private contract clauses and
-retrieved legal evidence to that provider. `disabled` is the documented
-default for this override. When unset, the existing `LLM_PROVIDER` setting
-continues to control contract-analysis generation for backward compatibility.
+provider); this isolates legal Q&A from other application behavior. The Q&A
+override uses the configured model, version, URL, and key settings, and is
+included in cache keys.
+
 Gemini retries one network or 5xx failure; rate limits and
 unavailable models are reported explicitly rather than retried indefinitely.
 Update `LLM_MODEL_NAME` when a configured Gemini model is retired.
@@ -160,13 +138,13 @@ re-index when intentionally changing the model version.
 
 ## Answer cache configuration
 
-The answer cache uses the same `REDIS_URL` as queues/rate limits, but stores
-legal Q&A responses under a separate key namespace.
+The answer cache uses `REDIS_URL` and stores legal Q&A responses under a
+separate key namespace.
 `LEGAL_QA_CACHE_TTL_SECONDS` defaults to 3600 seconds; setting it to `0`
-disables answer caching without disabling Redis-backed rate limiting or audit
-queues. `LEGAL_QA_CACHE_VERSION` defaults to `v1`; increment it to make old
-answer keys unreachable after answer-logic or configuration changes not already
-included in the key. Retrieval mode, RRF offset, candidate/result cutoffs,
+disables answer caching without disabling Redis-backed rate limiting.
+`LEGAL_QA_CACHE_VERSION` defaults to `v1`; increment it to make old answer keys
+unreachable after answer-logic or configuration changes not already included
+in the key. Retrieval mode, RRF offset, candidate/result cutoffs,
 reranker model path/version, and embedding configuration are also part of the
 key. Legal-source/provision/index changes update the knowledge-base fingerprint
 automatically. Old versioned entries expire by TTL and are not physically
@@ -179,33 +157,26 @@ separate from rate limiting, which fails closed when Redis is unavailable.
 ## Deployment configuration
 
 The repository's existing [`render.yaml`](./render.yaml) describes a Render
-web API, a separate audit worker, PostgreSQL, and a Redis-compatible service.
-It is a hosting blueprint, not a deployment verification: it has not been
-deployed or tested against a Render account. It runs migrations in the API
-build command and starts the API and worker with their respective commands.
+web API, PostgreSQL, and Redis. It is a hosting blueprint, not a deployment
+verification: it has not been deployed or tested against a Render account. It
+runs migrations in the API build command and starts the API service.
 The frontend is not deployed by that blueprint and needs a separate static
 frontend deployment with `VITE_API_BASE_URL` pointing to the API.
 
-The blueprint sets both LLM and embedding providers to `disabled`. API startup
-can succeed in that state, but answer generation returns an explicit
-unavailable-provider error, and audit analysis cannot produce AI findings.
-Configure supported providers using the hosting platform's secret/environment
-settings before relying on those features. Confirm PostgreSQL pgvector
-availability and migration permissions for the selected database plan.
+The blueprint sets LLM and embedding providers to `disabled`. API startup can
+succeed in that state, but answer generation returns an explicit unavailable-
+provider error. Configure supported providers using the hosting platform's
+secret/environment settings before relying on AI answers. Confirm PostgreSQL
+pgvector availability and migration permissions for the selected database plan.
 
 The blueprint configures local private-file storage. [Render persistent
-disks](https://render.com/docs/disks) attach to a specific service; the API's
-disk is not shared with the worker's disk even if their names and
-`PRIVATE_STORAGE_PATH` values match. Contract
-audits require the worker to access the exact private files uploaded by the
-API. Replace local storage with an approved shared private object store, or
-otherwise provide a verified shared-storage implementation, before using
-multi-service audits. Do not treat the current local-storage blueprint as
-production-ready for contract files.
+disks](https://render.com/docs/disks) attach to a specific service. Use an
+approved private object store for uploaded files in a multi-instance production
+deployment; do not treat local storage as production-ready for shared use.
 
 This repository intentionally has no Docker Compose setup. For local
 development, start PostgreSQL with pgvector and Redis using the host's supported
-installation, then follow the migration/API/worker commands above. No
+installation, then follow the migration and API commands above. No
 credentials or local provider secrets belong in checked-in example files.
 
 ## Database migrations
@@ -310,13 +281,12 @@ and must be checked against the original. OCR is off by default and is not
 bundled with the Python application. DOCX page numbers are not available from
 the document structure, so extraction includes paragraph references without
 inventing page numbers. Delete removes the private file and soft-deletes
-metadata to preserve audit foreign keys. If physical cleanup fails, the API
+metadata to preserve database references. If physical cleanup fails, the API
 reports that cleanup is pending while leaving the metadata soft-deleted.
 
 An authenticated legal-question endpoint provides preliminary,
 evidence-grounded AI answers when eligible legal sources and an LLM provider
-are available. It abstains when evidence is absent or uncertain; it does not
-make legal judgments. Contract audit analysis is a separate workflow.
+are available. It abstains when evidence is absent or uncertain; it does not make legal judgments.
 Legal-source status is initialized to `unknown`; records are not considered
 current unless their status and verification are established explicitly.
 
@@ -581,7 +551,7 @@ the original document, especially for Amharic or other languages and long
 multi-part rules.
 
 `retrieve_legal_evidence(query, review_context, top_k, db=...)` is the shared
-retrieval entry point used by both legal Q&A and contract analysis.
+retrieval entry point for legal Q&A.
 `LegalReviewContext` supports review date,
 jurisdiction, language, source type, law number, and article filters. Review
 dates constrain retrieval to known effective/end-date intervals; missing
@@ -608,8 +578,7 @@ include validated source/article references or an explicit
 provider is configured or it fails, the endpoint returns a service error
 rather than a canned answer.
 
-This endpoint does not read contract documents or create audits. No legal
-corpus is bundled with the application; production answers require
+No legal corpus is bundled with the application; production answers require
 independently verified source material in the existing legal-source registry.
 The endpoint and its tests do not establish legal correctness.
 
@@ -630,8 +599,8 @@ evidence. Their answer-cache keys include the owner scope and a digest of that
 transcript, so private conversation-derived answers are not shared across
 users or with the public-question endpoint. The transcript itself is not
 stored in Redis. Conversation text is stored in the application's database
-until the owner deletes the conversation; provider credentials, audit content,
-and contract documents are not copied into conversation records.
+until the owner deletes the conversation; provider credentials and uploaded
+file contents are not copied into conversation records.
 
 Supported answers use Redis cache-aside before retrieval, embedding, or LLM
 work. Cache keys are deterministic hashes of the normalized public question,
@@ -649,7 +618,7 @@ continues through normal retrieval and configured AI generation. It never
 turns a Redis outage into a cached or hardcoded answer. Only validated,
 supported answers are cached; insufficient-evidence results and failures are
 not. Public endpoint cache entries contain public legal Q&A results only,
-never contract text or audit output. User identity is omitted only for public
+never full uploaded files. User identity is omitted only for public
 questions whose answer depends exclusively on public legal sources and request
 context; conversation answers use the owner-scoped key described above.
 
@@ -689,15 +658,13 @@ LLM.
 
 - **Unit/regression tests** use SQLite, mocks, or clearly labeled synthetic
   records; they cover evidence eligibility, citation validation, source
-  versioning, cache ordering/isolation, conversation ownership, and audit/cache
-  separation. Run the focused suite from `backend/`:
+  versioning, cache ordering/isolation, and conversation ownership. Run the focused suite from `backend/`:
 
   ```bash
   python -m pytest -q -m unit \
     tests/test_legal_questions.py \
     tests/test_legal_retrieval.py \
     tests/test_legal_sources.py \
-    tests/test_audits.py \
     tests/test_documents.py
   ```
 
@@ -735,185 +702,13 @@ cd backend
 python -m pytest tests/test_legal_questions.py
 ```
 
-## Contract analysis
+## Legacy audit data
 
-The analysis service is separate from API routes and is invoked with an
-existing pending `Audit`, its database session, private storage implementation,
-and an LLM provider. It extracts candidate English-language paragraphs for
-duration, compensation, working hours, leave, probation, termination, notice,
-confidentiality, and signatures. It preserves extracted wording and available
-page/paragraph references. Keyword extraction is a candidate finder, not proof
-that all clauses were found. If locally configured, the shared document
-extraction path can use Tesseract for scanned PDF pages; OCR output is
-fallible and is included with processing warnings.
-
-AI analysis is disabled unless explicitly configured. To use an approved
-OpenAI-compatible provider, set these values privately in `backend/.env` or a
-secret manager:
-
-```dotenv
-LLM_PROVIDER=openai_compatible
-LLM_API_URL=https://your-provider.example/v1
-LLM_API_KEY= # optional only for an unauthenticated private endpoint
-LLM_MODEL_NAME=your-approved-model
-LLM_MODEL_VERSION=provider-model-revision
-LLM_TIMEOUT_SECONDS=90
-MAX_CONTRACT_ANALYSIS_CHARACTERS=500000
-```
-
-The provider URL may be a base `/v1` URL (the service appends
-`/chat/completions`) or a full `/chat/completions` URL. The service sends
-extracted contract clauses and retrieved legal evidence to that provider.
-Use only a provider approved to process confidential contract data; keep keys
-server-side and never commit them. The provider must return a JSON object with
-the fields validated by `LLMClauseAnalysis`; invalid or unavailable provider
-responses fail the audit rather than completing it.
-
-An optional local Ollama adapter also uses the existing LLM interface and is
-available to both contract analysis and legal Q&A. Install and start Ollama,
-explicitly install the model you choose with Ollama, then configure:
-
-```dotenv
-LLM_PROVIDER=ollama
-LLM_API_URL=http://localhost:11434
-LLM_MODEL_NAME=your-installed-model
-LLM_MODEL_VERSION=your-model-revision
-```
-
-The adapter calls Ollama's local `/api/chat` endpoint with a bounded response
-size and the configured timeout. It does not install models or start Ollama.
-An unavailable service or missing model is reported as unavailable; rate
-limits are reported distinctly. `LLM_PROVIDER=disabled` remains the default,
-and no example answer is returned if generation is unconfigured or fails.
-Local inference depends on the selected model and host resources; no free-tier,
-quota, or quality guarantee is implied. The existing
-`openai_compatible` provider remains available for externally configured
-services. Gemini is supported by the same provider interface. Configure
-`LEGAL_QA_LLM_PROVIDER=gemini` for public legal Q&A and
-`CONTRACT_ANALYSIS_LLM_PROVIDER=gemini` only when contract-clause transmission
-to Gemini is explicitly approved. Leave `LLM_PROVIDER=disabled` to avoid
-implicitly sharing the provider selection across both workflows. External
-services receive the question and retrieved legal evidence used for Q&A, and
-the extracted clauses and retrieved evidence used for contract analysis. Both
-options keep credentials server-side and require HTTPS for remote endpoints;
-unauthenticated HTTP is permitted only on loopback.
-
-For an integration from a trusted workflow, call `analyze_audit(audit_id,
-db=..., storage=..., llm_provider=...)` from
-`backend/app/services/compliance_analysis.py`. The returned `FinalAuditAnalysis`
-includes limitations and evidence metadata. The service persists findings only
-after validation. A citation must identify a provision returned by retrieval,
-match its source/article/sub-article, cite a source eligible for findings, and
-quote a substring of the saved provision text. Unsupported or uncertain
-citations downgrade the result to `insufficient_evidence`; provider failures
-record a safe failure code and do not mark the audit completed. The existing
-finding confidence column remains unset because model self-confidence is not
-calibrated as a probability.
-
-There is no verified, versioned Ethiopian employment-law rule set configured,
-so this module performs no deterministic legal-compliance checks and does not
-provide definitive legal advice. Review results and cited sources with a
-qualified Ethiopian legal professional. Unit tests use synthetic fixtures and
-mock providers; they do not validate a model or legal interpretation:
-
-```bash
-cd backend
-python -m pytest tests/test_compliance_analysis.py
-```
-
-## Audit workflow and worker
-
-Audits are created from an existing, non-deleted PDF or DOCX document. The
-requester must own a personal document or have an allowed membership in its
-organization. Audit details, status, and findings repeat those access checks;
-organization documents require an active membership for each request. Audit
-creation returns `202 Accepted` with a queued status.
-
-Processing uses Redis and RQ. Start PostgreSQL and Redis, apply migrations, and
-run the API and worker in separate terminals:
-
-```bash
-# Terminal 1: PostgreSQL and Redis must be available.
-redis-server
-
-# Terminal 2
-cd backend
-alembic upgrade head
-python -m app.workers.audit_worker
-
-# Terminal 3
-cd backend
-uvicorn app.main:app --reload
-```
-
-Configure `DATABASE_URL` and `REDIS_URL` in `backend/.env`. The worker also
-needs the same private-storage configuration and an enabled LLM provider to
-complete analysis. It reads documents only through the configured private
-storage abstraction. Audit states progress through `queued`, `extracting`,
-`retrieving_sources`, `analyzing`, `generating_report`, and `completed`, or
-`failed`. Extraction warnings are retained on the audit. Findings and the
-completed state are committed atomically; failed processing does not leave
-partial findings.
-
-RQ jobs have a configurable timeout (`AUDIT_JOB_TIMEOUT_SECONDS`, default
-30 minutes). A worker crash can leave an audit in an active state; after the
-configured stale threshold (`AUDIT_STALE_AFTER_SECONDS`, default 35 minutes),
-an authorized user may call `POST /api/v1/audits/{audit_id}/retry`. Failed
-audits can also be explicitly retried. Retries are rejected if findings were
-already persisted. Workers claim only queued audits with a conditional database
-update, so duplicate job delivery cannot start a second run. A Redis enqueue
-failure is recorded as a failed audit and can be retried when Redis is
-available.
-
-Example audit request:
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/audits \
-  -H "Authorization: Bearer <access-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"document_id":"<owned-document-uuid>","review_options":{"jurisdiction":"ET","review_date":"2026-10-24"}}'
-```
-
-Poll `GET /api/v1/audits/{audit_id}/status` and retrieve completed findings
-from `GET /api/v1/audits/{audit_id}/findings`. Analysis still requires a
-configured provider and verified applicable legal sources for supported
-citations; it does not imply legal advice. Integration tests use a test-only
-mock analyzer that only emits an insufficient-evidence outcome when no
-authoritative fixture is available. To run them:
-
-```bash
-cd backend
-python -m pytest tests/test_audits.py tests/test_compliance_analysis.py
-```
-
-## Audit reports and finding feedback
-
-Completed audits provide a saved-result JSON report at
-`GET /api/v1/audits/{audit_id}/report` and a downloadable PDF at
-`GET /api/v1/audits/{audit_id}/report.pdf`. Both routes use the same document
-ownership and organization-membership checks as audit findings; responses are
-private and non-cacheable. They read the stored audit, finding, and citation
-records and never rerun extraction or an AI provider. Citation source title,
-version, URL, article reference, and provision text are snapshotted when a new
-finding is saved so later registry changes do not silently rewrite that
-report. Existing citations without snapshots use their linked source records.
-
-Users with access to a completed audit can submit feedback through
-`POST /api/v1/findings/{finding_id}/feedback`. Supported categories are
-`incorrect_finding`, `incorrect_citation`, `missing_issue`, and `other`;
-`other` requires a description, and descriptions are limited to 5,000
-characters.
-
-PDF output uses ReportLab. The built-in PDF font can render its supported
-Western character set. The repository does not bundle an Ethiopic font.
-For Amharic or other scripts outside that encoding, configure
-`REPORT_UNICODE_FONT_PATH` to a server-installed, licensed TrueType `.ttf` font
-that contains every character in the report. The font is embedded in generated
-PDFs. If no configured font covers the report's characters, the PDF endpoint
-returns a clear service-unavailable response instead of silently replacing
-characters; the JSON report preserves Unicode text. ReportLab does not perform
-complex-script shaping, so verify the chosen font and rendered output with
-native-language reviewers before production.
+The contract-audit API and worker have been removed. Existing audit database
+records and migration history are retained; this cleanup does not drop tables
+or delete saved data. Redis remains in use for request rate limiting and
+optional legal-Q&A answer caching. User-uploaded legal documents still feed the
+RAG knowledge base, and changes to those documents invalidate cached answers.
 
 ## Security posture and production checklist
 
@@ -923,7 +718,7 @@ organization membership checks, private local file storage, upload signature
 and MIME checks, bounded uploads and pagination, source verification gates,
 parameterized SQLAlchemy retrieval, strict model-output schemas, server-side
 citation validation, safe generic 500 responses, and Redis-backed limits on
-login, uploads/source ingestion, audit creation, and retry. No cookies are
+login, uploads, and source ingestion. No cookies are
 used, so browser CSRF protections are not applicable to the bearer-token API;
 CORS does not allow credentials. Request IDs are validated or replaced and
 included in structured logs. Contract contents, credentials, and exception
@@ -944,9 +739,9 @@ Before production:
   production workers. The included local storage is intended for development
   and single-host deployment.
 - Verify backup, retention, and deletion policy. Document deletion removes the
-  file and soft-deletes metadata while preserving audits; no automated
-  retention/purge schedule or orphan-file reconciliation job is implemented.
-- Approve the LLM/embedding vendors for confidential contract/legal data and
+  file and soft-deletes metadata; no automated retention/purge schedule or
+  orphan-file reconciliation job is implemented.
+- Approve the LLM/embedding vendors for confidential legal data and
   review their retention and residency terms. The app does not claim model
   accuracy or legally validated conclusions. Remote provider URLs must use
   HTTPS; unauthenticated HTTP is allowed only for loopback development.
@@ -961,6 +756,6 @@ cd backend
 python -m pytest
 ```
 
-The full test suite includes synthetic legal fixtures and mock analysis
+The full test suite includes synthetic legal fixtures and mock legal-answer
 providers; it is not a penetration test or legal validation. PDF-dependent
 tests require PyMuPDF to be installed.

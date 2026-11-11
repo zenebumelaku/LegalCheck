@@ -25,7 +25,6 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = Field(default=10, gt=0, le=100)
     max_docx_uncompressed_size_mb: int = Field(default=50, gt=0, le=500)
     private_storage_path: Path = Path("var/private-documents")
-    report_unicode_font_path: Optional[Path] = None
     ocr_enabled: bool = False
     embedding_provider: Literal[
         "disabled",
@@ -65,28 +64,12 @@ class Settings(BaseSettings):
     llm_api_key: Optional[SecretStr] = None
     llm_model_name: str = Field(default="not-configured", min_length=1, max_length=255)
     llm_model_version: str = Field(default="v1", min_length=1, max_length=100)
-    contract_analysis_llm_provider: Optional[
-        Literal["disabled", "openai_compatible", "ollama", "gemini"]
-    ] = None
     llm_timeout_seconds: int = Field(default=90, gt=0, le=300)
     legal_qa_cache_version: str = Field(default="v1", min_length=1, max_length=100)
     legal_qa_cache_ttl_seconds: int = Field(default=3600, ge=0, le=2_592_000)
-    audit_job_timeout_seconds: int = Field(default=1800, gt=0, le=7200)
-    audit_stale_after_seconds: int = Field(default=2100, gt=0, le=14400)
     rate_limit_login_per_minute: int = Field(default=10, gt=0, le=1000)
     rate_limit_auth_per_minute: int = Field(default=10, gt=0, le=1000)
     rate_limit_upload_per_minute: int = Field(default=10, gt=0, le=1000)
-    rate_limit_audit_per_minute: int = Field(default=5, gt=0, le=1000)
-    max_contract_analysis_characters: int = Field(
-        default=500_000,
-        gt=0,
-        le=2_000_000,
-    )
-
-    @field_validator("report_unicode_font_path", mode="before")
-    @classmethod
-    def empty_report_font_path_is_unset(cls, value: object) -> object:
-        return None if value == "" else value
 
     @field_validator("embedding_local_model_path", mode="before")
     @classmethod
@@ -102,7 +85,6 @@ class Settings(BaseSettings):
         "resend_api_key",
         "password_reset_from_email",
         "legal_qa_llm_provider",
-        "contract_analysis_llm_provider",
         "llm_api_key",
         "llm_api_url",
         "embedding_api_key",
@@ -114,11 +96,7 @@ class Settings(BaseSettings):
         return None if value == "" else value
 
     @model_validator(mode="after")
-    def validate_audit_timeouts(self) -> "Settings":
-        if self.audit_stale_after_seconds <= self.audit_job_timeout_seconds:
-            raise ValueError(
-                "AUDIT_STALE_AFTER_SECONDS must exceed AUDIT_JOB_TIMEOUT_SECONDS."
-            )
+    def validate_settings(self) -> "Settings":
         if "*" in self.cors_origins:
             raise ValueError("Wildcard CORS origins are not permitted.")
         parsed_reset_url = urlsplit(self.password_reset_frontend_url)
