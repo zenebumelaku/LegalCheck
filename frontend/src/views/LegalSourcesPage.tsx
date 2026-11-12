@@ -15,35 +15,59 @@ import {
   Building2
 } from 'lucide-react';
 import { LegalSource, LegalArticle } from '../types';
+import { User } from '../types';
 import { LegalSourceService } from '../services/legal-source.service';
 import { formatDate } from '../lib/utils';
 import { EmptyState, LoadingSkeleton } from '../components/ui/FeedbackModals';
 
-export function LegalSourcesPage() {
+interface LegalSourcesPageProps {
+  currentUser: User | null;
+}
+
+export function LegalSourcesPage({ currentUser }: LegalSourcesPageProps) {
   const [sources, setSources] = useState<LegalSource[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
-  const [expandedSourceId, setExpandedSourceId] = useState<string>('eth-labour-proc-1156-2019');
+  const [reloadCount, setReloadCount] = useState(0);
+  const [expandedSourceId, setExpandedSourceId] = useState('');
   const [selectedArticle, setSelectedArticle] = useState<LegalArticle | null>(null);
+  const [applicabilityNotes, setApplicabilityNotes] = useState('');
+  const [applicabilityError, setApplicabilityError] = useState<string | null>(null);
+  const [savingApplicability, setSavingApplicability] = useState(false);
 
   useEffect(() => {
     async function fetchSources() {
       setLoading(true);
+      setLoadError(null);
       try {
         const data = await LegalSourceService.listLegalSources({
           query: searchQuery,
           status: statusFilter
         });
         setSources(data);
+        setExpandedSourceId(currentId => {
+          if (data.some(source => source.id === currentId)) return currentId;
+          return (
+            data.find(source => source.proclamationNumber === '1156/2019')?.id ??
+            data[0]?.id ??
+            ''
+          );
+        });
       } catch (err) {
         console.error('Failed to load legal sources', err);
+        setLoadError(
+          err instanceof Error
+            ? err.message
+            : 'Could not load legal sources. Please try again.'
+        );
       } finally {
         setLoading(false);
       }
     }
     fetchSources();
-  }, [searchQuery, statusFilter]);
+  }, [searchQuery, statusFilter, reloadCount]);
 
   const getStatusBadge = (status: LegalSource['status']) => {
     switch (status) {
@@ -76,6 +100,29 @@ export function LegalSourcesPage() {
         );
     }
   };
+
+  async function reviewLabourProclamation(source: LegalSource) {
+    setSavingApplicability(true);
+    setApplicabilityError(null);
+    try {
+      await LegalSourceService.reviewApplicability(source.id, {
+        legal_status: 'current',
+        effective_date: source.effectiveDate || null,
+        end_date: null,
+        verification_notes: applicabilityNotes.trim()
+      });
+      setApplicabilityNotes('');
+      setReloadCount(count => count + 1);
+    } catch (error) {
+      setApplicabilityError(
+        error instanceof Error
+          ? error.message
+          : 'Could not save the applicability review.'
+      );
+    } finally {
+      setSavingApplicability(false);
+    }
+  }
 
   return (
     <div className="max-w-6xl mx-auto py-8 px-4 sm:px-6 space-y-6">
@@ -119,6 +166,21 @@ export function LegalSourcesPage() {
       {/* Sources List */}
       {loading ? (
         <LoadingSkeleton count={3} />
+      ) : loadError ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900"
+        >
+          <p className="font-semibold">Legal sources could not be loaded.</p>
+          <p className="mt-1">{loadError}</p>
+          <button
+            type="button"
+            className="mt-3 rounded-lg bg-rose-900 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-800"
+            onClick={() => setReloadCount(count => count + 1)}
+          >
+            Try again
+          </button>
+        </div>
       ) : sources.length === 0 ? (
         <EmptyState
           title="No Legal Sources Found"
@@ -206,6 +268,57 @@ export function LegalSourcesPage() {
                         <span className="font-medium text-slate-800">{source.provenance.gazetaVolume}</span>
                       </div>
                     </div>
+
+                    {currentUser?.role === 'ADMIN' &&
+                      source.proclamationNumber === '1156/2019' &&
+                      source.status === 'UNKNOWN' && (
+                        <form
+                          className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3"
+                          onSubmit={event => {
+                            event.preventDefault();
+                            void reviewLabourProclamation(source);
+                          }}
+                        >
+                          <div>
+                            <h3 className="text-sm font-semibold text-amber-950">
+                              Applicability review required
+                            </h3>
+                            <p className="mt-1 text-xs leading-relaxed text-amber-900">
+                              Confirm that Proclamation 1156/2019 is currently in force
+                              using an authoritative source. This review is recorded
+                              under your administrator account.
+                            </p>
+                          </div>
+                          <label className="block text-xs font-medium text-slate-700">
+                            Review note
+                            <textarea
+                              required
+                              minLength={10}
+                              maxLength={10000}
+                              value={applicabilityNotes}
+                              onChange={event =>
+                                setApplicabilityNotes(event.target.value)
+                              }
+                              className="mt-1 block w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                              placeholder="Describe the authoritative source checked and why this proclamation remains current."
+                            />
+                          </label>
+                          {applicabilityError && (
+                            <p role="alert" className="text-xs text-rose-800">
+                              {applicabilityError}
+                            </p>
+                          )}
+                          <button
+                            type="submit"
+                            disabled={savingApplicability}
+                            className="rounded-md bg-amber-900 px-3 py-2 text-xs font-semibold text-white disabled:opacity-60"
+                          >
+                            {savingApplicability
+                              ? 'Saving review…'
+                              : 'Confirm current status'}
+                          </button>
+                        </form>
+                      )}
 
                     {/* Article Search or Direct List */}
                     <div>

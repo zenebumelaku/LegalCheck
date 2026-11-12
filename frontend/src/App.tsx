@@ -171,7 +171,9 @@ export default function App() {
                 }
               />
             )}
-            {path === '/legal-sources' && <LegalSourcesPage />}
+            {path === '/legal-sources' && (
+              <LegalSourcesPage currentUser={currentUser} />
+            )}
           </main>
 
           <Footer onNavigate={navigate} />

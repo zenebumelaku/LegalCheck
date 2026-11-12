@@ -33,7 +33,7 @@ export class AuthService {
     if (!response) return null;
 
     const role: User['role'] =
-      response.role === 'admin' ? 'LEGAL_COUNSEL' : existing?.role ?? 'COMPLIANCE_OFFICER';
+      response.role === 'admin' ? 'ADMIN' : existing?.role ?? 'COMPLIANCE_OFFICER';
     const candidate = {
       id: String(response.id ?? existing?.id ?? ''),
       email: String(response.email ?? existing?.email ?? ''),

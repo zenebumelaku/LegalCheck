@@ -58,6 +58,7 @@ def _add_source(
     legal_status: str = "current",
     effective_date: Optional[date] = date(2020, 1, 1),
     end_date: Optional[date] = None,
+    jurisdiction: str = "ET",
     provisions: list[tuple[str, str]],
 ) -> LegalSource:
     reviewer = db.scalar(select(User).where(User.email == "retrieval-reviewer@example.test"))
@@ -75,7 +76,7 @@ def _add_source(
         title=f"Synthetic employment fixture {version}",
         law_number="TEST-FIXTURE-NO-LAW",
         source_type="fixture",
-        jurisdiction="ET",
+        jurisdiction=jurisdiction,
         language="en",
         publication_date=date(2019, 1, 1),
         effective_date=effective_date,
@@ -360,6 +361,29 @@ def test_bm25_retrieval_prefers_repeated_shorter_keyword_match(
     assert response.results[0].retrieval_scores.keyword > (
         response.results[1].retrieval_scores.keyword
     )
+
+
+def test_ethiopia_scope_includes_federal_legal_sources(
+    db_session: Session,
+) -> None:
+    source = _add_source(
+        db_session,
+        version="synthetic-federal-jurisdiction-v1",
+        jurisdiction="Federal",
+        provisions=[("federal-hours", "Normal working hours are limited by law.")],
+    )
+
+    response = retrieve_legal_evidence(
+        "normal working hours",
+        LegalReviewContext(jurisdiction="ET"),
+        5,
+        db=db_session,
+        settings=Settings(embedding_provider="disabled"),
+    )
+
+    assert [result.provision_id for result in response.results] == [
+        source.provisions[0].id
+    ]
 
 
 def test_rrf_combines_keyword_and_vector_ranks_and_deduplicates_provisions(

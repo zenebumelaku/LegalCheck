@@ -289,6 +289,49 @@ def test_eligible_retrieved_evidence_is_answered_and_cited(
     assert answer_cache.set_calls
 
 
+def test_direct_weekly_working_hours_answer_uses_exact_evidence_if_model_abstains(
+    legal_question_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(
+        db_session,
+        user_id=user_id,
+        text=(
+            "Normal hours of work shall not exceed 8 hours a day or "
+            "48 hours a week."
+        ),
+    )
+    provider = MockQuestionProvider(
+        {
+            "answer": "The retrieved evidence did not support a validated answer.",
+            "evidence_assessment": "insufficient",
+            "citations": [],
+        }
+    )
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda *args, **kwargs: provider,
+    )
+
+    response = _ask(
+        legal_question_client,
+        token,
+        question="What is the maximum normal working time per week under Ethiopian labour law?",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "answered"
+    assert "48 hours a week" in payload["answer"]
+    assert payload["citations"][0]["provision_id"] == str(provision.id)
+    assert payload["citations"][0]["supporting_quote"] == (
+        "Normal hours of work shall not exceed 8 hours a day or "
+        "48 hours a week."
+    )
+
+
 def test_second_normalized_question_hits_cache_before_retrieval_or_generation(
     legal_question_client: TestClient,
     answer_cache: MemoryAnswerCache,
@@ -477,6 +520,17 @@ def test_conversation_create_continue_and_read_preserves_citation_snapshot(
     user_id, token = _login(legal_question_client)
     provision = _add_source(db_session, user_id=user_id)
     provider = MockQuestionProvider(_supported_response(provision))
+    retrieval_questions: list[str] = []
+    original_retrieval = legal_question_answering.retrieve_legal_evidence
+
+    def capture_retrieval_question(question: str, *args, **kwargs):
+        retrieval_questions.append(question)
+        return original_retrieval(question, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.retrieve_legal_evidence",
+        capture_retrieval_question,
+    )
     monkeypatch.setattr(
         "app.services.legal_question_answering.get_llm_provider",
         lambda *args, **kwargs: provider,
@@ -500,6 +554,10 @@ def test_conversation_create_continue_and_read_preserves_citation_snapshot(
     assert continued.status_code == 200
     assert "Prior conversation turns" in provider.calls[1][0]
     assert "What does the fixture say about wages?" in provider.calls[1][0]
+    assert retrieval_questions == [
+        "What does the fixture say about wages?",
+        "Can you clarify that wage rule?",
+    ]
 
     provision.legal_source.title = "Updated synthetic source title"
     provision.legal_source.version_label = "updated-synthetic-version"
@@ -705,7 +763,7 @@ def test_conversation_cache_keys_are_isolated_by_user(
     assert first_user_id != second_user_id
 
 
-def test_conversation_context_changes_cache_key(
+def test_repeated_conversation_question_hits_cache(
     legal_question_client: TestClient,
     answer_cache: MemoryAnswerCache,
     db_session: Session,
@@ -733,8 +791,42 @@ def test_conversation_context_changes_cache_key(
 
     assert first.status_code == 201
     assert continued.status_code == 200
-    assert len(provider.calls) == 2
+    assert first.json()["answer"]["cache_hit"] is False
+    assert continued.json()["answer"]["cache_hit"] is True
+    assert len(provider.calls) == 1
     assert len(answer_cache.get_calls) == 2
+    assert answer_cache.get_calls[0] == answer_cache.get_calls[1]
+
+
+def test_new_conversation_question_keeps_context_in_cache_key(
+    legal_question_client: TestClient,
+    answer_cache: MemoryAnswerCache,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(db_session, user_id=user_id)
+    provider = MockQuestionProvider(_supported_response(provision))
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda *args, **kwargs: provider,
+    )
+    first = _ask_in_conversation(
+        legal_question_client,
+        token,
+        question="What does the synthetic fixture say?",
+    )
+    continued = _ask_in_conversation(
+        legal_question_client,
+        token,
+        question="What does it say about wages?",
+        conversation_id=first.json()["conversation_id"],
+    )
+
+    assert first.status_code == 201
+    assert continued.status_code == 200
+    assert continued.json()["answer"]["cache_hit"] is False
+    assert len(provider.calls) == 2
     assert answer_cache.get_calls[0] != answer_cache.get_calls[1]
 
 

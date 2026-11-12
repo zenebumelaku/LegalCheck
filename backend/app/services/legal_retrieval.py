@@ -58,8 +58,14 @@ def _apply_context(
     if not context.include_unverified:
         statement = statement.where(LegalSource.verification_status == "verified")
     if context.jurisdiction:
+        jurisdiction = context.jurisdiction.strip().lower()
+        jurisdictions = (
+            ("et", "ethiopia", "federal")
+            if jurisdiction in {"et", "ethiopia", "federal"}
+            else (jurisdiction,)
+        )
         statement = statement.where(
-            func.lower(LegalSource.jurisdiction) == context.jurisdiction.strip().lower()
+            func.lower(LegalSource.jurisdiction).in_(jurisdictions)
         )
     if context.language:
         statement = statement.where(

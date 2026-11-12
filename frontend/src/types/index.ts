@@ -34,7 +34,7 @@ export interface User {
   email: string;
   fullName: string;
   organization: string;
-  role: 'COMPLIANCE_OFFICER' | 'HR_MANAGER' | 'LEGAL_COUNSEL' | 'BUSINESS_OWNER';
+  role: 'COMPLIANCE_OFFICER' | 'HR_MANAGER' | 'LEGAL_COUNSEL' | 'BUSINESS_OWNER' | 'ADMIN';
   createdAt: string;
   dataRetentionDays: number;
 }

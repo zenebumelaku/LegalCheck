@@ -14,7 +14,6 @@ from app.storage.interface import get_private_storage
 from app.core.config import settings
 from app.services.document_extraction import extract_document
 from app.services.document_ingestion import ingest_document_to_vector_store
-from app.services.legal_question_cache import get_legal_question_cache
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sync_all_documents")
@@ -66,9 +65,7 @@ def sync_all_documents():
             db.rollback()
             logger.error("Failed to ingest '%s': %s", doc.original_filename, exc)
 
-    cache = get_legal_question_cache()
-    cache.invalidate_all()
-    logger.info("Sync complete. Ingested %d documents. Redis cache invalidated.", synced_count)
+    logger.info("Sync complete. Ingested %d documents.", synced_count)
     db.close()
 
 if __name__ == "__main__":

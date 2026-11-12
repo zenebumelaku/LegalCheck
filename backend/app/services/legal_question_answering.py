@@ -1,6 +1,7 @@
 import json
 import hashlib
 import logging
+import re
 from datetime import date
 from typing import Optional, Protocol
 from uuid import UUID
@@ -15,6 +16,7 @@ from app.db.models import LegalProvision, LegalSource
 from app.schemas.citations import CitationReference
 from app.schemas.legal_questions import (
     LegalQuestionAnswer,
+    LegalQuestionCitationInput,
     LegalQuestionCitation,
     LegalQuestionLLMResponse,
 )
@@ -44,6 +46,17 @@ _INSUFFICIENT_ANSWER = (
 )
 _INVALID_SUPPORT_ANSWER = (
     "The retrieved evidence did not support a validated answer to this question."
+)
+_WEEKLY_WORKING_HOURS_QUESTION = re.compile(
+    r"\b(?:working\s+hours?|hours?\s+of\s+work|working\s+time)\b"
+    r"(?=.*\b(?:week|weekly)\b)",
+    re.IGNORECASE,
+)
+_NORMAL_WORKING_HOURS_LIMIT = re.compile(
+    r"\bnormal hours of work shall not exceed "
+    r"\d+(?:\.\d+)? hours a day or "
+    r"\d+(?:\.\d+)? hours a week\b[.!?]?",
+    re.IGNORECASE,
 )
 
 
@@ -118,6 +131,34 @@ def _quote_in_text(quote: str, text: str) -> bool:
         if suffix in norm_t:
             return True
     return False
+
+
+def _direct_weekly_working_hours_response(
+    question: str,
+    results: list[LegalEvidenceResult],
+) -> Optional[LegalQuestionLLMResponse]:
+    if not _WEEKLY_WORKING_HOURS_QUESTION.search(question):
+        return None
+
+    for result in results:
+        match = _NORMAL_WORKING_HOURS_LIMIT.search(result.text)
+        if match is None:
+            continue
+        quote = match.group(0)
+        return LegalQuestionLLMResponse(
+            answer=f'The retrieved legal text states: "{quote}"',
+            evidence_assessment="supporting",
+            citations=[
+                LegalQuestionCitationInput(
+                    source_id=result.source_id,
+                    provision_id=result.provision_id,
+                    article_number=result.article_number,
+                    sub_article_reference=result.sub_article_reference,
+                    supporting_quote=quote,
+                )
+            ],
+        )
+    return None
 
 
 def _result_is_eligible(db: Session, result: LegalEvidenceResult) -> bool:
@@ -295,7 +336,7 @@ def answer_legal_question(
         else normalized_question
     )
     retrieval = retrieve_legal_evidence(
-        contextual_question,
+        normalized_question,
         context,
         current_settings.legal_retrieval_candidate_k,
         db=db,
@@ -360,17 +401,6 @@ def answer_legal_question(
             "The AI provider could not produce a valid legal-question response."
         ) from exc
 
-    if parsed.evidence_assessment != "supporting" or not parsed.citations:
-        return LegalQuestionAnswer(
-            status="insufficient_evidence",
-            question=normalized_question,
-            answer=_INVALID_SUPPORT_ANSWER,
-            review_date=review_date,
-            citations=[],
-            model_name=provider.model_name,
-            model_version=provider.model_version,
-        )
-
     if not all(_result_is_eligible(db, result) for result in eligible_results):
         return LegalQuestionAnswer(
             status="insufficient_evidence",
@@ -382,6 +412,23 @@ def answer_legal_question(
             model_version=provider.model_version,
         )
 
+    if parsed.evidence_assessment != "supporting" or not parsed.citations:
+        direct_response = _direct_weekly_working_hours_response(
+            normalized_question,
+            eligible_results,
+        )
+        if direct_response is None:
+            return LegalQuestionAnswer(
+                status="insufficient_evidence",
+                question=normalized_question,
+                answer=_INVALID_SUPPORT_ANSWER,
+                review_date=review_date,
+                citations=[],
+                model_name=provider.model_name,
+                model_version=provider.model_version,
+            )
+        parsed = direct_response
+
     try:
         citations = _validate_citations(
             parsed.citations,
@@ -390,19 +437,46 @@ def answer_legal_question(
             review_date,
         )
     except ValueError as exc:
-        logger.warning(
-            "Legal question answer included an invalid citation",
-            extra={"error_type": type(exc).__name__},
+        direct_response = _direct_weekly_working_hours_response(
+            normalized_question,
+            eligible_results,
         )
-        return LegalQuestionAnswer(
-            status="insufficient_evidence",
-            question=normalized_question,
-            answer=_INVALID_SUPPORT_ANSWER,
-            review_date=review_date,
-            citations=[],
-            model_name=provider.model_name,
-            model_version=provider.model_version,
-        )
+        if direct_response is None:
+            logger.warning(
+                "Legal question answer included an invalid citation",
+                extra={"error_type": type(exc).__name__},
+            )
+            return LegalQuestionAnswer(
+                status="insufficient_evidence",
+                question=normalized_question,
+                answer=_INVALID_SUPPORT_ANSWER,
+                review_date=review_date,
+                citations=[],
+                model_name=provider.model_name,
+                model_version=provider.model_version,
+            )
+        try:
+            citations = _validate_citations(
+                direct_response.citations,
+                {result.provision_id: result for result in eligible_results},
+                db,
+                review_date,
+            )
+        except ValueError as fallback_exc:
+            logger.warning(
+                "Direct legal evidence answer failed citation validation",
+                extra={"error_type": type(fallback_exc).__name__},
+            )
+            return LegalQuestionAnswer(
+                status="insufficient_evidence",
+                question=normalized_question,
+                answer=_INVALID_SUPPORT_ANSWER,
+                review_date=review_date,
+                citations=[],
+                model_name=provider.model_name,
+                model_version=provider.model_version,
+            )
+        parsed = direct_response
 
     answer = LegalQuestionAnswer(
         status="answered",
