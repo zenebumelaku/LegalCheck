@@ -1,117 +1,82 @@
 # LegalCheck Ethiopia
 
-**Evidence-grounded legal research, built around retrieval-augmented
-generation (RAG).**
+<div align="center">
 
-LegalCheck helps users explore Ethiopian legal sources and ask questions
-answered from retrieved provisions. Its RAG pipeline finds relevant evidence
-before asking a language model to respond, then checks the response citations
-against that evidence. Redis cache-aside avoids repeating retrieval and
-generation for equivalent questions.
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-Cache-DC382D?logo=redis&logoColor=white)
 
+</div>
 
-## RAG pipeline
+LegalCheck is a legal research application for Ethiopian law. It helps users search legal sources, ask questions, and receive answers grounded in the retrieved legal text rather than relying on model memory alone.
+
+## Overview
+
+LegalCheck combines a legal document knowledge base, retrieval-based search, and a language model to support evidence-based legal research. The app is designed for professionals, researchers, and teams reviewing Ethiopian legal and regulatory materials.
+
+The system follows a simple pattern:
+
+- find the most relevant legal provisions first
+- use the retrieved evidence to answer the question
+- verify that the answer is supported by the underlying source material
+
+## What the app does
+
+- Search legal sources and provisions
+- Support exact, keyword, and semantic retrieval
+- Use retrieval-augmented generation (RAG) to generate answers from evidence
+- Check citation support against retrieved legal text
+- Cache successful responses in Redis to reduce repeated compute cost
+- Expose both a backend API and a frontend interface
+
+## RAG and search flow
 
 ```mermaid
 flowchart LR
-  S[Legal source] --> V[Admin verifies source and applicability]
-  V --> P[Curated provisions]
-  P --> E[Optional embeddings and indexed chunks]
-
-  Q[User question] --> C{Redis answer cache}
-  C -->|Hit| A[Cached supported answer and citations]
-  C -->|Miss| X[Exact-article lookup]
-  X --> F[Keyword retrieval]
-  E --> F
-  F --> R[Rank and fuse evidence]
-  R --> T[Optional cross-encoder reranking]
-  T --> G[Generate answer from eligible evidence]
-  G --> J[Validate citations against retrieved provisions]
-  J -->|Supported| W[Return and cache answer]
-  J -->|Insufficient or invalid| N[Abstain; do not cache]
+    Q[User question] --> S[Search legal corpus]
+    S --> M[Exact match + keyword + semantic retrieval]
+    M --> E[Select relevant evidence]
+    E --> L[LLM generates answer]
+    L --> V[Validate against source text]
+    V -->|Supported| R[Return answer]
+    V -->|Weak evidence| A[Abstain or ask for more context]
+    R --> C[Cache result in Redis]
 ```
 
-### How retrieval works
+LegalCheck uses a retrieval-first workflow:
 
-1. **Curate trusted inputs.** Administrators ingest legal sources and
-   provisions. A source must pass verification and be classified as current
-   and applicable to be eligible for findings. No source is trusted merely
-   because it was uploaded.
-2. **Find candidate provisions.** The default `LEGAL_RETRIEVAL_MODE=hybrid`
-   combines exact-article matches, BM25 keyword ranking, and semantic vector
-   search when an embedding provider and indexed vectors are available.
-   Reciprocal-rank fusion combines the result lists, with exact-article
-   matches deliberately weighted more heavily. Candidates are deduplicated
-   by provision.
-3. **Refine and select evidence.** Up to 20 candidates are considered by
-   default (`LEGAL_RETRIEVAL_CANDIDATE_K`); an optional local cross-encoder
-   can rerank them. It is disabled by default. Up to 5 eligible passages are
-   sent to answer generation (`LEGAL_QA_TOP_K`).
-4. **Generate and validate.** The model receives the question and selected
-   evidence, not an unrestricted instruction to answer from memory. LegalCheck
-   checks that citations point to retrieved provisions and that supporting
-   quotes match. If evidence is insufficient, legal applicability is
-   uncertain, or citations fail validation, the service abstains rather than
-   returning an unsupported answer.
+1. A user asks a legal question.
+2. The system searches the legal corpus for relevant provisions.
+3. It combines direct article matching, keyword retrieval, and vector-based similarity when enabled.
+4. The most relevant passages are selected and fed into the language model.
+5. The generated answer is checked against the retrieved legal source before it is returned.
 
-Embeddings and language-model generation are **disabled by default** and must
-be configured separately. Without embeddings, exact-article and keyword
-retrieval remain available. Without an LLM provider, the API reports that
-answer generation is unavailable. An LLM does not make an unverified source
-authoritative, and automated checks do not establish legal accuracy.
+This makes the system more grounded and transparent. Instead of answering from general model knowledge alone, the app anchors responses to legal evidence.
 
-## Redis answer cache
+## Redis caching
 
-LegalCheck uses **cache-aside** for generated answers:
+Redis is used to cache validated answers for repeated or similar legal questions. This helps reduce latency and avoids re-running the expensive retrieval and generation pipeline every time.
 
-1. Normalize the question and build a key from the question, review context,
-   knowledge-base fingerprint, and answer/retrieval model settings.
-2. Check Redis **before retrieval, embeddings, or LLM generation**.
-3. On a hit, return the previously validated answer and citations.
-4. On a miss, run the RAG pipeline and cache only a supported answer with
-   validated citations. Insufficient-evidence results and provider failures
-   are not cached.
+The cache is intended to:
 
-The knowledge-base fingerprint covers legal sources, provisions, and indexed
-chunks. A content, review, or index change therefore changes the key, making
-older answers unreachable without synchronously finding and deleting every
-related entry. Conversation answers also include an owner scope and a digest
-of private conversation context; the transcript itself is not stored in
-Redis. `LEGAL_QA_CACHE_VERSION` allows an operator to make old keys
-unreachable after a prompt or deployment change not otherwise represented in
-the key.
+- speed up repeated requests
+- reduce LLM and retrieval costs
+- reuse previously validated answers when the legal context is unchanged
 
-`LEGAL_QA_CACHE_TTL_SECONDS` defaults to **3600 seconds (one hour)**; set it
-to `0` to disable answer caching. TTL limits how long unused entries remain,
-while fingerprinted keys provide logical invalidation when knowledge or
-answer settings change. Old versioned entries expire naturally unless they
-are explicitly deleted. This balances reuse of costly retrieval/generation
-against freshness and memory use.
-
-Cache failures are **fail-open for legal answers**: if Redis is unavailable
-when the cache is initialized, the service uses an in-memory cache; Redis
-read/write errors during a request let answer generation proceed without
-relying on a cached result. This fallback does not weaken evidence checks.
-Redis-backed request rate limits are different: they fail closed with an
-error if Redis is unavailable.
-
-The application does not configure Redis's memory-eviction policy. Redis also
-stores rate-limit counters, so monitor memory and eviction behavior; separate
-Redis services can isolate cache eviction from request protection. The
-general caching comparison and policy trade-offs are in the standalone
-[one-page caching assignment](./CACHING-ASSIGNMENT.md).
+The app also avoids stale answers when the knowledge base changes, which is important for legal research where source updates matter.
 
 ## Stack
 
-- **Frontend:** React, TypeScript, Vite
-- **API:** Python, FastAPI
-- **Persistence and retrieval:** PostgreSQL, SQLAlchemy, Alembic, `pgvector`
-- **Cache and rate limits:** Redis
+- Frontend: React, TypeScript, Vite
+- Backend: Python, FastAPI
+- Database: PostgreSQL, SQLAlchemy, Alembic
+- Retrieval: `pgvector`, keyword search, hybrid retrieval
+- Cache and rate limits: Redis
+- Optional AI providers: OpenAI-compatible APIs, Ollama, Gemini, local embedding models
 
-## Run locally
-
-Requirements: Python 3.11+, PostgreSQL with `pgvector`, Redis, and Node.js/npm
-for the frontend.
+## Local development
 
 ### Backend
 
@@ -123,44 +88,66 @@ python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set `DATABASE_URL`, `REDIS_URL`, and `CORS_ORIGINS` in `.env`, then run:
+Then update `.env` with the correct database and Redis settings, and run:
 
 ```bash
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-The API is at `http://127.0.0.1:8000`; development API docs are at
-`http://127.0.0.1:8000/docs`.
+The API will be available at:
+
+- API: `http://127.0.0.1:8000`
+- Docs: `http://127.0.0.1:8000/docs`
 
 ### Frontend
 
-In another terminal:
+Open a second terminal and run:
 
 ```bash
 cd frontend
 npm install
-```
-
-Set `VITE_API_BASE_URL=http://127.0.0.1:8000` in `frontend/.env`, then run:
-
-```bash
+cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:3000`. Keep credentials in local environment files or
-a secret manager; never commit them.
+The frontend will run at:
 
-## Validation
+- `http://localhost:3000`
 
-From `backend/`, run the backend suite:
+## Project structure
+
+```text
+LegalCheck/
+├── README.md
+├── CACHING-ASSIGNMENT.md
+├── backend/
+│   ├── app/
+│   ├── alembic/
+│   ├── tests/
+│   ├── requirements.txt
+│   ├── .env.example
+│   └── .env
+├── frontend/
+│   ├── src/
+│   ├── e2e/
+│   ├── package.json
+│   ├── .env.example
+│   └── .env
+├── legalcheck_document/
+├── demo_corpus/
+└── var/
+```
+
+## Testing
+
+From the `backend/` directory:
 
 ```bash
 python -m pytest
 ```
 
-The real-Redis cache-aside integration test is opt-in and requires a running
-Redis server:
+There is also an optional Redis integration test for cache behavior:
 
 ```bash
 LEGAL_QA_REDIS_INTEGRATION=1 REDIS_URL=redis://localhost:6379/0 \
@@ -168,5 +155,9 @@ LEGAL_QA_REDIS_INTEGRATION=1 REDIS_URL=redis://localhost:6379/0 \
   tests/integration/test_legal_question_cache_redis.py
 ```
 
-It verifies cache hit/miss behavior, TTL, and knowledge-base key changes
-using synthetic test fixtures; it does not evaluate legal correctness.
+## Notes
+
+- AI features are optional and must be configured separately.
+- Sensitive credentials should live in local `.env` files or a secure secret store.
+- See [CACHING-ASSIGNMENT.md](./CACHING-ASSIGNMENT.md) for more detail on the caching strategy.
+- This project is intended to support legal research and evidence-based review, not replace legal judgment.

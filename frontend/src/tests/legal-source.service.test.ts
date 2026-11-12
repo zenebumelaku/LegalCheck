@@ -1,4 +1,5 @@
 import { LegalSourceService } from '../services/legal-source.service';
+import { ETHIOPIAN_LEGAL_SOURCES } from '../data/legal-sources-db';
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(`TEST FAILED: ${message}`);
@@ -60,6 +61,19 @@ async function runTests(): Promise<void> {
   };
 
   try {
+    const labourProclamation = ETHIOPIAN_LEGAL_SOURCES.find(
+      source => source.proclamationNumber === 'No. 1156/2019'
+    );
+    assert(
+      labourProclamation?.articles.length === 193,
+      'Includes all 193 Labour Proclamation articles in the website source data'
+    );
+    assert(
+      labourProclamation?.articles[0].articleNumber === 'Article 1' &&
+        labourProclamation?.articles[192].articleNumber === 'Article 193',
+      'Displays the full Labour Proclamation article range'
+    );
+
     const sources = await LegalSourceService.listLegalSources({
       query: 'SYN-1',
       status: 'IN_FORCE'

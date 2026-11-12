@@ -58,6 +58,16 @@ _NORMAL_WORKING_HOURS_LIMIT = re.compile(
     r"\d+(?:\.\d+)? hours a week\b[.!?]?",
     re.IGNORECASE,
 )
+_PROBATION_PERIOD_DURATION_QUESTION = re.compile(
+    r"\bprobation(?:ary)?\b"
+    r"(?=.*\b(?:how long|duration|length|maximum|max|last|exceed|days?)\b)",
+    re.IGNORECASE,
+)
+_MAX_PROBATION_PERIOD = re.compile(
+    r"\bprobation period shall not exceed "
+    r"\d+(?:\.\d+)? working days?\b",
+    re.IGNORECASE,
+)
 
 
 class LegalQuestionProviderUnavailable(RuntimeError):
@@ -141,12 +151,40 @@ def _direct_weekly_working_hours_response(
         return None
 
     for result in results:
-        match = _NORMAL_WORKING_HOURS_LIMIT.search(result.text)
+        match = _NORMAL_WORKING_HOURS_LIMIT.search(_normalized_text(result.text))
         if match is None:
             continue
         quote = match.group(0)
         return LegalQuestionLLMResponse(
             answer=f'The retrieved legal text states: "{quote}"',
+            evidence_assessment="supporting",
+            citations=[
+                LegalQuestionCitationInput(
+                    source_id=result.source_id,
+                    provision_id=result.provision_id,
+                    article_number=result.article_number,
+                    sub_article_reference=result.sub_article_reference,
+                    supporting_quote=quote,
+                )
+            ],
+        )
+    return None
+
+
+def _direct_probation_period_response(
+    question: str,
+    results: list[LegalEvidenceResult],
+) -> Optional[LegalQuestionLLMResponse]:
+    if not _PROBATION_PERIOD_DURATION_QUESTION.search(question):
+        return None
+
+    for result in results:
+        match = _MAX_PROBATION_PERIOD.search(_normalized_text(result.text))
+        if match is None:
+            continue
+        quote = match.group(0)
+        return LegalQuestionLLMResponse(
+            answer=f'The retrieved legal text states: "{quote}".',
             evidence_assessment="supporting",
             citations=[
                 LegalQuestionCitationInput(
@@ -413,9 +451,9 @@ def answer_legal_question(
         )
 
     if parsed.evidence_assessment != "supporting" or not parsed.citations:
-        direct_response = _direct_weekly_working_hours_response(
-            normalized_question,
-            eligible_results,
+        direct_response = (
+            _direct_weekly_working_hours_response(normalized_question, eligible_results)
+            or _direct_probation_period_response(normalized_question, eligible_results)
         )
         if direct_response is None:
             return LegalQuestionAnswer(
@@ -437,9 +475,9 @@ def answer_legal_question(
             review_date,
         )
     except ValueError as exc:
-        direct_response = _direct_weekly_working_hours_response(
-            normalized_question,
-            eligible_results,
+        direct_response = (
+            _direct_weekly_working_hours_response(normalized_question, eligible_results)
+            or _direct_probation_period_response(normalized_question, eligible_results)
         )
         if direct_response is None:
             logger.warning(

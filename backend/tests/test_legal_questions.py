@@ -299,7 +299,8 @@ def test_direct_weekly_working_hours_answer_uses_exact_evidence_if_model_abstain
         db_session,
         user_id=user_id,
         text=(
-            "Normal hours of work shall not exceed 8 hours a day or "
+            "Normal hours of work shall not exceed 8 hours a\n"
+            "day or "
             "48 hours a week."
         ),
     )
@@ -329,6 +330,50 @@ def test_direct_weekly_working_hours_answer_uses_exact_evidence_if_model_abstain
     assert payload["citations"][0]["supporting_quote"] == (
         "Normal hours of work shall not exceed 8 hours a day or "
         "48 hours a week."
+    )
+
+
+def test_direct_probation_period_answer_uses_exact_evidence_if_model_abstains(
+    legal_question_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id, token = _login(legal_question_client)
+    provision = _add_source(
+        db_session,
+        user_id=user_id,
+        text=(
+            "When the parties agree to have a probation period, the agreement "
+            "shall be made in writing; in such a case, the probation period "
+            "shall not exceed 60 working days beginning from the first date "
+            "of employment."
+        ),
+    )
+    provider = MockQuestionProvider(
+        {
+            "answer": "The retrieved evidence did not support a validated answer.",
+            "evidence_assessment": "insufficient",
+            "citations": [],
+        }
+    )
+    monkeypatch.setattr(
+        "app.services.legal_question_answering.get_llm_provider",
+        lambda *args, **kwargs: provider,
+    )
+
+    response = _ask(
+        legal_question_client,
+        token,
+        question="How long may an agreed probation period last under Article 11?",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "answered"
+    assert "60 working days" in payload["answer"]
+    assert payload["citations"][0]["provision_id"] == str(provision.id)
+    assert payload["citations"][0]["supporting_quote"] == (
+        "probation period shall not exceed 60 working days"
     )
 
 

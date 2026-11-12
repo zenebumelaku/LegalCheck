@@ -1,6 +1,8 @@
 import builtins
 import json
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +15,7 @@ from app.services.embeddings import (
     EmbeddingProviderError,
     OpenAICompatibleEmbeddingProvider,
     SentenceTransformersEmbeddingProvider,
+    get_embedding_provider,
 )
 
 
@@ -240,6 +243,51 @@ def test_local_sentence_transformer_loads_only_local_384_dimension_model(
     assert captured["load_options"]["local_files_only"] is True
     assert captured["load_options"]["trust_remote_code"] is False
     assert captured["encode_options"]["show_progress_bar"] is False
+
+
+def test_concurrent_local_provider_requests_share_one_model_load(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    model_path = tmp_path / "concurrent-local-model"
+    model_path.mkdir()
+    constructor_calls = 0
+    constructor_lock = threading.Lock()
+
+    class FakeModel:
+        def get_sentence_embedding_dimension(self):
+            return EMBEDDING_DIMENSIONS
+
+        def encode(self, texts, **kwargs):
+            return [[0.5] * EMBEDDING_DIMENSIONS for _ in texts]
+
+    def fake_constructor(path, **kwargs):
+        nonlocal constructor_calls
+        with constructor_lock:
+            constructor_calls += 1
+        return FakeModel()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(SentenceTransformer=fake_constructor),
+    )
+    configured = Settings(
+        embedding_provider="sentence_transformers",
+        embedding_local_model_path=model_path,
+        embedding_model_version="concurrent-test-v1",
+    )
+    start = threading.Barrier(8)
+
+    def get_provider():
+        start.wait()
+        return get_embedding_provider(configured)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        providers = list(executor.map(lambda _: get_provider(), range(8)))
+
+    assert constructor_calls == 1
+    assert all(provider is providers[0] for provider in providers)
 
 
 def test_local_sentence_transformer_rejects_incompatible_vector_dimension(

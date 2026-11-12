@@ -1,4 +1,5 @@
 import math
+import threading
 from pathlib import Path
 from typing import Optional, Protocol, Sequence
 
@@ -10,6 +11,11 @@ from app.core.provider_url import validate_provider_url
 
 EMBEDDING_DIMENSIONS = 384
 _MAX_PROVIDER_RESPONSE_BYTES = 1_000_000
+_LOCAL_PROVIDER_LOCK = threading.Lock()
+_LOCAL_PROVIDERS: dict[
+    tuple[Path, str],
+    "SentenceTransformersEmbeddingProvider",
+] = {}
 
 
 class EmbeddingProvider(Protocol):
@@ -205,10 +211,18 @@ def get_embedding_provider(
             raise EmbeddingProviderConfigurationError(
                 "EMBEDDING_LOCAL_MODEL_PATH is required for sentence_transformers."
             )
-        return SentenceTransformersEmbeddingProvider(
-            model_path=configured_settings.embedding_local_model_path,
-            model_version=configured_settings.embedding_model_version,
-        )
+        model_path = configured_settings.embedding_local_model_path
+        model_version = configured_settings.embedding_model_version
+        provider_key = (model_path.resolve(), model_version)
+        with _LOCAL_PROVIDER_LOCK:
+            provider = _LOCAL_PROVIDERS.get(provider_key)
+            if provider is None:
+                provider = SentenceTransformersEmbeddingProvider(
+                    model_path=model_path,
+                    model_version=model_version,
+                )
+                _LOCAL_PROVIDERS[provider_key] = provider
+        return provider
     raise EmbeddingProviderConfigurationError(
         "The configured embedding provider is not supported."
     )

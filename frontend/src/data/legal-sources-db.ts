@@ -1,4 +1,28 @@
 import { LegalSource } from '../types';
+import labourProvisions from './labour-provisions.json';
+
+function completeLabourArticles(curatedArticles: LegalSource['articles']) {
+  const curatedByNumber = new Map(
+    curatedArticles.map(article => [
+      article.articleNumber.replace(/^Article\s+/i, ''),
+      article
+    ])
+  );
+
+  return labourProvisions.map(provision => {
+    const curated = curatedByNumber.get(provision.article_number);
+    return {
+      id: curated?.id ?? `labour-article-${provision.article_number}`,
+      articleNumber: `Article ${provision.article_number}`,
+      subArticle:
+        provision.sub_article_reference ?? curated?.subArticle,
+      title: provision.section_title ?? 'Provision',
+      text: provision.text,
+      amharicText: curated?.amharicText,
+      notes: curated?.notes
+    };
+  });
+}
 
 export const ETHIOPIAN_LEGAL_SOURCES: LegalSource[] = [
   {
@@ -19,7 +43,7 @@ export const ETHIOPIAN_LEGAL_SOURCES: LegalSource[] = [
       lastVerifiedDate: '2026-01-15',
       gazetaVolume: 'Year 25, No. 89, Addis Ababa'
     },
-    articles: [
+    articles: completeLabourArticles([
       {
         id: 'art-4',
         articleNumber: 'Article 4',
@@ -158,7 +182,7 @@ export const ETHIOPIAN_LEGAL_SOURCES: LegalSource[] = [
         text: 'An employer shall take all necessary measures to safeguard the occupational safety and health of workers, provide free appropriate personal protective equipment (PPE), ensure proper ventilation and lighting, and establish a workplace safety committee.',
         notes: 'Mandates employer-funded protective gear and safety procedures.'
       }
-    ]
+    ])
   },
   {
     id: 'eth-civil-code-1960-title-xvi',
